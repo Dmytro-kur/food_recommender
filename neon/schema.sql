@@ -99,7 +99,7 @@ AS $$
     access.status,
     access.created_at
   FROM public.app_users AS access
-  JOIN neon_auth.user AS auth_user ON auth_user.id = access.user_id
+  JOIN neon_auth.user AS auth_user ON auth_user.id::text = access.user_id
   WHERE public.is_app_admin()
   ORDER BY access.created_at DESC;
 $$;
@@ -200,7 +200,7 @@ USING (
 -- UPDATE public.app_users
 -- SET role = 'admin', status = 'active', updated_at = now()
 -- WHERE user_id = (
---   SELECT id
+--   SELECT id::text
 --   FROM neon_auth.user
 --   WHERE email = 'your-email@example.com'
 -- );

@@ -72,7 +72,7 @@ VITE_NEON_DATA_API_URL=https://.../neondb/rest/v1
 UPDATE public.app_users
 SET role = 'admin', status = 'active', updated_at = now()
 WHERE user_id = (
-  SELECT id
+  SELECT id::text
   FROM neon_auth.user
   WHERE email = 'your-email@example.com'
 );
