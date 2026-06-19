@@ -1385,6 +1385,14 @@ function toggleShoppingItem(id, checked) {
   syncIngredientAvailability();
   render();
   showToast(checked ? `${item.name} — куплено` : `${item.name} повернуто у список`);
+  if (checked) {
+    notifyAction({
+      title: "Покупку відмічено 🛒",
+      body: `${item.name} додано в запаси`,
+      tag: `shopping-bought-${item.id}`,
+      url: "#pantry",
+    });
+  }
 }
 
 function findRecipeById(recipeId) {
@@ -1436,6 +1444,12 @@ function openUseRecipeModal(recipeId) {
     closeModal();
     render();
     showToast(`У меню: ${recipe.title}`);
+    notifyAction({
+      title: "План оновлено 🍽️",
+      body: `${recipe.title} поставлено у вибраний день`,
+      tag: `meal-planned-${recipe.id}`,
+      url: "#menu",
+    });
   });
 
   modalSheet.querySelector("[data-append-recipe]").addEventListener("click", () => {
@@ -1451,6 +1465,12 @@ function openUseRecipeModal(recipeId) {
     closeModal();
     render();
     showToast(`${recipe.title} додано в план`);
+    notifyAction({
+      title: "Страву додано в план 🍽️",
+      body: `${recipe.title} тепер у меню`,
+      tag: `meal-appended-${recipe.id}`,
+      url: "#menu",
+    });
   });
 }
 
@@ -1766,6 +1786,12 @@ function swapMeal(mealId) {
   });
   render();
   showToast(`Заміна: ${replacement.title}`);
+  notifyAction({
+    title: "План оновлено 🍽️",
+    body: `У меню тепер ${replacement.title}`,
+    tag: `meal-swapped-${state.meals[index].id}`,
+    url: "#menu",
+  });
 }
 
 function openRecipeForm(mealId = null) {
@@ -1860,6 +1886,12 @@ function openRecipeForm(mealId = null) {
     state.activeView = "menu";
     render();
     showToast(editing ? "Рецепт оновлено" : "Рецепт додано до меню");
+    notifyAction({
+      title: editing ? "Рецепт оновлено 🍽️" : "Страву заплановано 🍽️",
+      body: editing ? `${recipe.title} збережено в меню` : `${recipe.title} додано до плану`,
+      tag: `recipe-${editing ? "updated" : "created"}-${recipe.id}`,
+      url: "#menu",
+    });
   });
 }
 
@@ -2424,6 +2456,56 @@ function generateShoppingList() {
   state.activeView = "shopping";
   render();
   showToast(added ? `Список оновлено: +${added}` : "Список уже відповідає меню");
+  if (added) {
+    notifyAction({
+      title: "Список покупок оновлено 🛒",
+      body: `Додано ${added} ${pluralize(added, "продукт", "продукти", "продуктів")}`,
+      tag: "shopping-list-generated",
+      url: "#shopping",
+    });
+  }
+}
+
+async function readyServiceWorkerRegistration(timeout = 900) {
+  if (!("serviceWorker" in navigator)) return null;
+
+  return Promise.race([
+    navigator.serviceWorker.ready,
+    new Promise((resolve) => setTimeout(() => resolve(null), timeout)),
+  ]);
+}
+
+async function notifyAction({ title, body, tag, url = "#home" }) {
+  if (!("Notification" in window) || !window.isSecureContext) return false;
+
+  try {
+    let permission = Notification.permission;
+    if (permission === "default") {
+      permission = await Notification.requestPermission();
+    }
+    if (permission !== "granted") return false;
+
+    const iconUrl = new URL("./icon.svg", window.location.href).href;
+    const targetUrl = new URL(url, window.location.href).href;
+    const options = {
+      body,
+      icon: iconUrl,
+      badge: iconUrl,
+      tag,
+      data: { url: targetUrl },
+    };
+
+    const registration = await readyServiceWorkerRegistration();
+    if (registration) {
+      registration.showNotification(title, options);
+    } else {
+      new Notification(title, options);
+    }
+    return true;
+  } catch {
+    // Toasts already confirm the action, so notification failures should not block the flow.
+    return false;
+  }
 }
 
 async function requestShoppingNotification() {
