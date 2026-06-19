@@ -13,37 +13,92 @@ Mobile-first PWA для планування недорогого меню, ко
 - редагування кількості й стану запасів, видалення та швидке перенесення у покупки;
 - списання використаних інгредієнтів після завершення рецепта;
 - дешевші заміни для страв, якщо чогось немає;
-- локальна база IndexedDB, офлайн-режим та браузерні сповіщення;
+- email/password-авторизація через Neon Auth;
+- ролі `admin/user` та доступи `pending/active/blocked`;
+- синхронізація даних через Neon Data API і захист PostgreSQL RLS;
+- локальний IndexedDB-кеш на випадок короткого розриву з’єднання;
 - встановлення на домашній екран як окремої мобільної апки.
 
-## Запуск
+## Локальний запуск
 
-З кореня проєкту:
+Потрібен Node.js 20 або новіший.
 
 ```bash
-python3 -m http.server 8000
+npm install
+cp .env.example .env
+npm run dev
 ```
 
-Потім відкрийте [http://localhost:8000](http://localhost:8000).
+Після заповнення `.env` відкрийте [http://localhost:5173](http://localhost:5173).
 
-Для service worker і сповіщень потрібен `localhost` або HTTPS. Поточна версія показує локальне нагадування одразу після натискання на дзвіночок. Заплановані push-сповіщення потребуватимуть бекенду або нативної обгортки.
+Без Neon можна відкрити локальний деморежим:
 
-## База на телефоні
+```text
+http://localhost:5173/?local=1
+```
 
-Рецепти, запаси, меню та список покупок зберігаються в `IndexedDB` усередині браузера. Дані доступні офлайн і автоматично переживають перезапуск апки.
+## Налаштування Neon
 
-База прив’язана до адреси сайту та конкретного браузера. Якщо очистити дані сайту або видалити браузер, локальні дані також буде видалено. Для синхронізації між кількома телефонами пізніше знадобиться хмарна база й авторизація.
+> Станом на 19 червня 2026 року Neon Auth і Data API позначені Neon як Beta. Поточний інтерфейс використовує лише email/password, без OAuth.
+
+1. Створіть Neon-проєкт в AWS-регіоні.
+2. Відкрийте `Auth` і натисніть `Enable Auth`.
+3. Скопіюйте `Auth Base URL`.
+4. Відкрийте `Data API` і увімкніть її з опціями `Use Neon Auth` та `Grant public schema access`.
+5. Скопіюйте `Data API URL`.
+6. У `SQL Editor` виконайте файл [`neon/schema.sql`](neon/schema.sql).
+7. На сторінці Data API натисніть `Refresh schema cache`.
+8. У `Auth → Configuration → Domains` додайте адресу GitHub Pages без кінцевого `/`.
+9. У `Data API → Settings → CORS allowed origins` додайте ту саму адресу.
+
+Якщо SQL Editor показує `schema "auth" does not exist`, Data API не підключена до Neon Auth для вибраної branch/database. У `Data API → Settings → Authentication` має бути вказано `Neon Auth`. Якщо провайдера немає, додайте його або переввімкніть Data API з опцією `Use Neon Auth`.
+
+Локальний `.env`:
+
+```env
+VITE_NEON_AUTH_URL=https://.../neondb/auth
+VITE_NEON_DATA_API_URL=https://.../neondb/rest/v1
+```
+
+Ці URL не є паролем бази. Пароль PostgreSQL, Neon API key та інші секрети ніколи не додавайте у `VITE_*` змінні.
+
+## Перший адміністратор
+
+1. Зареєструйте свій акаунт в апці.
+2. Він отримає статус `pending`.
+3. У Neon SQL Editor виконайте:
+
+```sql
+UPDATE public.app_users
+SET role = 'admin', status = 'active', updated_at = now()
+WHERE user_id = (
+  SELECT id
+  FROM neon_auth.user
+  WHERE email = 'your-email@example.com'
+);
+```
+
+4. Натисніть в апці `Перевірити доступ`.
+
+Після цього список користувачів доступний через кнопку профілю. Адміністратор може дозволяти, блокувати й призначати інших адміністраторів.
+
+## Дані та доступ
+
+Neon Auth зберігає акаунти. Таблиця `app_users` містить роль і статус доступу. Таблиця `user_state` містить меню, рецепти, покупки та запаси.
+
+PostgreSQL Row-Level Security перевіряє `auth.user_id()`, тому звичайний користувач може читати й змінювати лише власний рядок. Заблокований або непідтверджений користувач не має доступу до `user_state`.
 
 ## CI/CD через GitHub Pages
 
-У проєкті є workflow [`.github/workflows/deploy-pages.yml`](.github/workflows/deploy-pages.yml). Він перевіряє JavaScript і автоматично публікує PWA після кожного push у `main`.
+Workflow [`.github/workflows/deploy-pages.yml`](.github/workflows/deploy-pages.yml) збирає Vite-проєкт і публікує `dist` після push у `main`.
 
 Перший запуск:
 
-1. Створіть GitHub-репозиторій та запуште цей проєкт у гілку `main`.
-2. На GitHub відкрийте `Settings → Pages`.
-3. У полі `Source` виберіть `GitHub Actions`.
-4. Відкрийте вкладку `Actions` і дочекайтеся зеленого workflow.
-5. Відкрийте адресу `https://USERNAME.github.io/REPOSITORY/`.
+1. Зробіть GitHub-репозиторій публічним.
+2. У `Settings → Secrets and variables → Actions` створіть secrets:
+   - `VITE_NEON_AUTH_URL`
+   - `VITE_NEON_DATA_API_URL`
+3. У `Settings → Pages` виберіть `Source → GitHub Actions`.
+4. Запуште зміни у `main` і дочекайтеся зеленого workflow.
 
 На Android у Chrome виберіть `Встановити додаток`. На iPhone у Safari натисніть `Поділитися → На початковий екран`.

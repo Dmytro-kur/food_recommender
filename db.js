@@ -19,12 +19,12 @@ function openDatabase() {
   });
 }
 
-async function readState() {
+export async function readState(key = STATE_KEY) {
   const database = await openDatabase();
 
   return new Promise((resolve, reject) => {
     const transaction = database.transaction(STORE_NAME, "readonly");
-    const request = transaction.objectStore(STORE_NAME).get(STATE_KEY);
+    const request = transaction.objectStore(STORE_NAME).get(key);
 
     request.onsuccess = () => resolve(request.result || null);
     request.onerror = () => reject(request.error);
@@ -32,12 +32,12 @@ async function readState() {
   });
 }
 
-async function writeState(state) {
+export async function writeState(state, key = STATE_KEY) {
   const database = await openDatabase();
 
   return new Promise((resolve, reject) => {
     const transaction = database.transaction(STORE_NAME, "readwrite");
-    transaction.objectStore(STORE_NAME).put(structuredClone(state), STATE_KEY);
+    transaction.objectStore(STORE_NAME).put(structuredClone(state), key);
 
     transaction.oncomplete = () => {
       database.close();
@@ -48,7 +48,18 @@ async function writeState(state) {
   });
 }
 
-window.krykhtaDB = {
-  readState,
-  writeState,
-};
+export async function deleteState(key = STATE_KEY) {
+  const database = await openDatabase();
+
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction(STORE_NAME, "readwrite");
+    transaction.objectStore(STORE_NAME).delete(key);
+
+    transaction.oncomplete = () => {
+      database.close();
+      resolve();
+    };
+    transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () => reject(transaction.error);
+  });
+}

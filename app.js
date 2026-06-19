@@ -1,4 +1,8 @@
+import { deleteState, readState, writeState } from "./db.js";
+import { neonClient, neonConfigured } from "./neon.js";
+
 const STORAGE_KEY = "krykhta-state-v1";
+const LOCAL_DB_STATE_KEY = "state";
 
 const defaultState = {
   activeView: "home",
@@ -193,6 +197,12 @@ const cookingGuides = {
 let state = structuredClone(defaultState);
 let toastTimer;
 let saveTimer;
+let cloudSaveTimer;
+let currentUser = null;
+let accessProfile = null;
+let cloudStateExists = false;
+let authFormMode = "sign-in";
+let isBootstrapping = false;
 
 const app = document.querySelector("#app");
 const modalBackdrop = document.querySelector("#modalBackdrop");
@@ -213,15 +223,46 @@ function loadLegacyState() {
 function saveState() {
   clearTimeout(saveTimer);
   const snapshot = structuredClone(state);
+  const localKey = currentUser ? `${LOCAL_DB_STATE_KEY}:${currentUser.id}` : LOCAL_DB_STATE_KEY;
 
   saveTimer = setTimeout(async () => {
     try {
-      await window.krykhtaDB.writeState(snapshot);
+      await writeState(snapshot, localKey);
       localStorage.removeItem(STORAGE_KEY);
     } catch {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
     }
   }, 80);
+
+  if (currentUser && accessProfile?.status === "active") {
+    scheduleCloudSave(snapshot);
+  }
+}
+
+function scheduleCloudSave(snapshot) {
+  clearTimeout(cloudSaveTimer);
+  cloudSaveTimer = setTimeout(() => persistCloudState(snapshot), 650);
+}
+
+async function persistCloudState(snapshot) {
+  if (!neonClient || !currentUser || accessProfile?.status !== "active") return;
+
+  const payload = {
+    owner_id: currentUser.id,
+    state: snapshot,
+    updated_at: new Date().toISOString(),
+  };
+
+  const result = cloudStateExists
+    ? await neonClient.from("user_state").update(payload).eq("owner_id", currentUser.id)
+    : await neonClient.from("user_state").insert(payload);
+
+  if (!result.error) {
+    cloudStateExists = true;
+    updateSyncIndicator("synced");
+  } else {
+    updateSyncIndicator("offline");
+  }
 }
 
 function hydrateState(saved) {
@@ -256,6 +297,228 @@ function normalizeMeal(meal) {
   };
 }
 
+function getSessionUser(sessionResult) {
+  return sessionResult?.data?.user || sessionResult?.data?.session?.user || null;
+}
+
+async function getAccessProfile(user) {
+  const existing = await neonClient
+    .from("app_users")
+    .select("user_id,role,status,created_at")
+    .eq("user_id", user.id)
+    .limit(1);
+
+  if (existing.error) throw existing.error;
+  if (existing.data?.[0]) return existing.data[0];
+
+  const created = await neonClient
+    .from("app_users")
+    .insert({
+      user_id: user.id,
+      role: "user",
+      status: "pending",
+    })
+    .select("user_id,role,status,created_at");
+
+  if (created.error) throw created.error;
+  return created.data?.[0] || null;
+}
+
+async function loadCloudState(userId) {
+  const result = await neonClient
+    .from("user_state")
+    .select("state,updated_at")
+    .eq("owner_id", userId)
+    .limit(1);
+
+  if (result.error) throw result.error;
+  cloudStateExists = Boolean(result.data?.[0]);
+  return result.data?.[0]?.state || null;
+}
+
+function renderAuthScreen(message = "") {
+  document.body.classList.add("auth-mode");
+  authFormMode = authFormMode === "sign-up" ? "sign-up" : "sign-in";
+  const signingUp = authFormMode === "sign-up";
+
+  app.innerHTML = `
+    <section class="auth-screen">
+      <div class="auth-brand">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 32 32">
+            <path d="M9 9.5C9 5.9 12 3 15.7 3h.6C20 3 23 5.9 23 9.5v1.1H9V9.5Z" />
+            <path d="M7 11h18l-1.7 15.2A2 2 0 0 1 21.3 28H10.7a2 2 0 0 1-2-1.8L7 11Z" />
+            <path d="M12 15.5v7M16 15.5v7M20 15.5v7" />
+          </svg>
+        </span>
+        <span>Крихта</span>
+      </div>
+      <div class="auth-card">
+        <p class="eyebrow">${signingUp ? "Новий користувач" : "З поверненням"}</p>
+        <h1>${signingUp ? "Створити акаунт" : "Увійти в апку"}</h1>
+        <p class="auth-description">
+          ${signingUp ? "Після реєстрації адміністратор має дозволити доступ." : "Твоє меню та запаси синхронізуються між пристроями."}
+        </p>
+        ${message ? `<div class="auth-message">${escapeHtml(message)}</div>` : ""}
+        <form id="authForm">
+          ${
+            signingUp
+              ? `
+                <label class="field">
+                  <span>Ім’я</span>
+                  <input name="name" type="text" autocomplete="name" placeholder="Дмитро" required autofocus />
+                </label>
+              `
+              : ""
+          }
+          <label class="field">
+            <span>Email</span>
+            <input name="email" type="email" autocomplete="email" placeholder="you@example.com" required ${signingUp ? "" : "autofocus"} />
+          </label>
+          <label class="field">
+            <span>Пароль</span>
+            <input
+              name="password"
+              type="password"
+              minlength="8"
+              autocomplete="${signingUp ? "new-password" : "current-password"}"
+              placeholder="Щонайменше 8 символів"
+              required
+            />
+          </label>
+          <button class="primary-button auth-submit" type="submit">
+            ${signingUp ? "Зареєструватися" : "Увійти"}
+          </button>
+        </form>
+        <button class="auth-switch" type="button" data-switch-auth>
+          ${signingUp ? "Уже є акаунт? Увійти" : "Немає акаунта? Зареєструватися"}
+        </button>
+      </div>
+    </section>
+  `;
+
+  app.querySelector("[data-switch-auth]").addEventListener("click", () => {
+    authFormMode = signingUp ? "sign-in" : "sign-up";
+    renderAuthScreen();
+  });
+  app.querySelector("#authForm").addEventListener("submit", handleAuthSubmit);
+}
+
+async function handleAuthSubmit(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const submitButton = form.querySelector("button[type='submit']");
+  const formData = new FormData(form);
+  const email = formData.get("email").trim();
+  const password = formData.get("password");
+
+  submitButton.disabled = true;
+  submitButton.textContent = "Зачекай…";
+
+  try {
+    const result =
+      authFormMode === "sign-up"
+        ? await neonClient.auth.signUp.email({
+            name: formData.get("name").trim(),
+            email,
+            password,
+          })
+        : await neonClient.auth.signIn.email({
+            email,
+            password,
+            rememberMe: true,
+          });
+
+    if (result.error) {
+      renderAuthScreen(result.error.message || "Не вдалося виконати вхід");
+      return;
+    }
+
+    const sessionResult = await neonClient.auth.getSession();
+    const user = getSessionUser(sessionResult);
+    if (!user) {
+      authFormMode = "sign-in";
+      renderAuthScreen("Перевір email і підтвердь реєстрацію, а потім увійди.");
+      return;
+    }
+
+    await bootstrap();
+  } catch (error) {
+    renderAuthScreen(error?.message || "Не вдалося з’єднатися з Neon");
+  }
+}
+
+function renderConfigurationScreen() {
+  document.body.classList.add("auth-mode");
+  app.innerHTML = `
+    <section class="auth-screen">
+      <div class="auth-brand">
+        <span class="brand-mark" aria-hidden="true">⚙</span>
+        <span>Крихта</span>
+      </div>
+      <div class="auth-card">
+        <p class="eyebrow">Потрібне налаштування</p>
+        <h1>Neon ще не підключено</h1>
+        <p class="auth-description">Додай дві змінні середовища з Neon Console:</p>
+        <pre class="config-code">VITE_NEON_AUTH_URL
+VITE_NEON_DATA_API_URL</pre>
+        <p class="auth-description">Для локальної демонстрації можна відкрити адресу з параметром <code>?local=1</code>.</p>
+      </div>
+    </section>
+  `;
+}
+
+function renderAccessScreen(profile, errorMessage = "") {
+  document.body.classList.add("auth-mode");
+  const blocked = profile?.status === "blocked";
+  app.innerHTML = `
+    <section class="auth-screen">
+      <div class="auth-brand">
+        <span class="brand-mark" aria-hidden="true">🔐</span>
+        <span>Крихта</span>
+      </div>
+      <div class="auth-card access-card">
+        <span class="access-emoji">${blocked ? "⛔" : "⏳"}</span>
+        <p class="eyebrow">${blocked ? "Доступ закрито" : "Очікує підтвердження"}</p>
+        <h1>${blocked ? "Акаунт заблоковано" : "Заявку надіслано"}</h1>
+        <p class="auth-description">
+          ${
+            blocked
+              ? "Звернися до адміністратора, якщо доступ потрібно відновити."
+              : "Адміністратор має дозволити цей акаунт. Після цього натисни «Перевірити доступ»."
+          }
+        </p>
+        ${errorMessage ? `<div class="auth-message">${escapeHtml(errorMessage)}</div>` : ""}
+        <div class="access-actions">
+          <button class="primary-button" type="button" data-refresh-access>Перевірити доступ</button>
+          <button class="secondary-button" type="button" data-auth-signout>Вийти</button>
+        </div>
+      </div>
+    </section>
+  `;
+
+  app.querySelector("[data-refresh-access]").addEventListener("click", () => bootstrap());
+  app.querySelector("[data-auth-signout]").addEventListener("click", signOut);
+}
+
+async function signOut() {
+  clearTimeout(cloudSaveTimer);
+  await neonClient?.auth.signOut();
+  currentUser = null;
+  accessProfile = null;
+  cloudStateExists = false;
+  authFormMode = "sign-in";
+  renderAuthScreen();
+}
+
+function updateSyncIndicator(status) {
+  const indicator = document.querySelector("#syncIndicator");
+  if (!indicator) return;
+  indicator.classList.toggle("offline", status === "offline");
+  indicator.querySelector("span:last-child").textContent =
+    status === "offline" ? "Офлайн — зміни лишилися на телефоні" : "Синхронізовано з Neon";
+}
+
 function formatMoney(value) {
   return `${Math.round(value)} ₴`;
 }
@@ -285,6 +548,7 @@ function getSortedSuggestions() {
 }
 
 function render() {
+  document.body.classList.remove("auth-mode");
   const renderers = {
     home: renderHome,
     menu: renderMenu,
@@ -508,9 +772,9 @@ function renderMenu() {
         <span class="date-label">${formatMoney(weeklyPrice)} · ${state.meals.reduce((sum, meal) => sum + meal.time, 0)} хв</span>
       </div>
       <div class="recipe-toolbar">
-        <div class="database-note">
+        <div class="database-note" id="syncIndicator">
           <span class="database-dot"></span>
-          <span>Збережено на цьому телефоні</span>
+          <span>${currentUser ? "Синхронізовано з Neon" : "Локальний режим"}</span>
         </div>
         <button class="compact-button primary" type="button" data-add-recipe>${icon("plus")} Рецепт</button>
       </div>
@@ -1431,6 +1695,169 @@ function openAddItemModal(type) {
   });
 }
 
+function openAccountModal() {
+  if (!currentUser) {
+    openModal(`
+      <div class="sheet-handle"></div>
+      <div class="sheet-header">
+        <div>
+          <h2 id="modalTitle">Локальний режим</h2>
+          <p>Дані зберігаються лише в цьому браузері.</p>
+        </div>
+        <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
+      </div>
+      <div class="alternative-card">
+        <strong>Neon не використовується</strong>
+        <p>Прибери параметр <code>?local=1</code> після налаштування змінних середовища.</p>
+      </div>
+    `);
+    return;
+  }
+
+  openModal(`
+    <div class="sheet-handle"></div>
+    <div class="sheet-header">
+      <div>
+        <h2 id="modalTitle">${escapeHtml(currentUser.name || "Акаунт")}</h2>
+        <p>${escapeHtml(currentUser.email || "")}</p>
+      </div>
+      <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
+    </div>
+    <div class="account-status-card">
+      <span class="account-avatar">${escapeHtml((currentUser.email || "U").slice(0, 1).toUpperCase())}</span>
+      <div>
+        <strong>${accessProfile?.role === "admin" ? "Адміністратор" : "Користувач"}</strong>
+        <span>Доступ: ${accessProfile?.status === "active" ? "активний" : accessProfile?.status}</span>
+      </div>
+    </div>
+    <div class="account-actions">
+      ${
+        accessProfile?.role === "admin"
+          ? `<button class="secondary-button" type="button" data-manage-users>${icon("users")} Керувати користувачами</button>`
+          : ""
+      }
+      <button class="danger-outline-button" type="button" data-account-signout>${icon("logout")} Вийти</button>
+    </div>
+  `);
+
+  modalSheet.querySelector("[data-manage-users]")?.addEventListener("click", openAdminUsersModal);
+  modalSheet.querySelector("[data-account-signout]").addEventListener("click", async () => {
+    closeModal();
+    await signOut();
+  });
+}
+
+async function openAdminUsersModal() {
+  openModal(`
+    <div class="sheet-handle"></div>
+    <div class="sheet-header">
+      <div>
+        <h2 id="modalTitle">Користувачі</h2>
+        <p>Завантажую список доступів…</p>
+      </div>
+      <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
+    </div>
+    <div class="modal-loading"><span></span></div>
+  `);
+
+  const result = await neonClient.rpc("list_app_users");
+
+  if (result.error) {
+    openModal(`
+      <div class="sheet-handle"></div>
+      <div class="sheet-header">
+        <div>
+          <h2 id="modalTitle">Не вдалося завантажити</h2>
+          <p>${escapeHtml(result.error.message || "Помилка Neon Data API")}</p>
+        </div>
+        <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
+      </div>
+    `);
+    return;
+  }
+
+  const users = result.data || [];
+  openModal(`
+    <div class="sheet-handle"></div>
+    <div class="sheet-header">
+      <div>
+        <h2 id="modalTitle">Користувачі</h2>
+        <p>${users.length} ${pluralize(users.length, "акаунт", "акаунти", "акаунтів")}</p>
+      </div>
+      <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
+    </div>
+    <div class="admin-user-list">
+      ${users
+        .map((user) => {
+          const isCurrent = user.user_id === currentUser.id;
+          return `
+            <article class="admin-user-card" data-admin-user="${escapeHtml(user.user_id)}">
+              <div class="admin-user-head">
+                <span class="account-avatar">${escapeHtml((user.email || "U").slice(0, 1).toUpperCase())}</span>
+                <div>
+                  <strong>${escapeHtml(user.display_name || user.email)}</strong>
+                  <span>${escapeHtml(user.email)}${isCurrent ? " · це ти" : ""}</span>
+                </div>
+              </div>
+              <div class="admin-user-controls">
+                <label class="field">
+                  <span>Доступ</span>
+                  <select name="status" ${isCurrent ? "disabled" : ""}>
+                    <option value="pending" ${user.status === "pending" ? "selected" : ""}>Очікує</option>
+                    <option value="active" ${user.status === "active" ? "selected" : ""}>Дозволено</option>
+                    <option value="blocked" ${user.status === "blocked" ? "selected" : ""}>Заблоковано</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>Роль</span>
+                  <select name="role" ${isCurrent ? "disabled" : ""}>
+                    <option value="user" ${user.role === "user" ? "selected" : ""}>Користувач</option>
+                    <option value="admin" ${user.role === "admin" ? "selected" : ""}>Адмін</option>
+                  </select>
+                </label>
+              </div>
+              ${
+                isCurrent
+                  ? ""
+                  : `<button class="compact-button primary admin-save-user" type="button">Зберегти доступ</button>`
+              }
+            </article>
+          `;
+        })
+        .join("")}
+    </div>
+  `);
+
+  modalSheet.querySelectorAll(".admin-save-user").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const card = button.closest("[data-admin-user]");
+      button.disabled = true;
+      button.textContent = "Зберігаю…";
+      const updateResult = await neonClient
+        .from("app_users")
+        .update({
+          status: card.querySelector("[name='status']").value,
+          role: card.querySelector("[name='role']").value,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("user_id", card.dataset.adminUser);
+
+      if (updateResult.error) {
+        button.disabled = false;
+        button.textContent = "Спробувати ще";
+        showToast(updateResult.error.message || "Не вдалося змінити доступ");
+        return;
+      }
+
+      button.textContent = "Збережено ✓";
+      setTimeout(() => {
+        button.disabled = false;
+        button.textContent = "Зберегти доступ";
+      }, 1200);
+    });
+  });
+}
+
 function openModal(content) {
   modalSheet.innerHTML = content;
   modalBackdrop.hidden = false;
@@ -1746,27 +2173,90 @@ function icon(name) {
     volume: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 9h4l5-4v14l-5-4H5V9ZM17 9a4 4 0 0 1 0 6M19 6a8 8 0 0 1 0 12"/></svg>',
     back: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5M11 18l-6-6 6-6"/></svg>',
     check: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>',
+    users: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3 20a6 6 0 0 1 12 0M14 15a5 5 0 0 1 7 4.5"/></svg>',
+    logout: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 5H5v14h5M14 8l4 4-4 4M8 12h10"/></svg>',
   };
   return icons[name] || "";
 }
 
 async function bootstrap() {
-  let saved = null;
+  if (isBootstrapping) return;
+  isBootstrapping = true;
+  app.innerHTML = `
+    <div class="app-loading" role="status">
+      <span></span>
+      <strong>Перевіряю доступ…</strong>
+    </div>
+  `;
 
   try {
-    saved = await window.krykhtaDB.readState();
-  } catch {
-    saved = null;
-  }
+    const localMode = new URLSearchParams(window.location.search).has("local");
+    if (!neonConfigured) {
+      if (!localMode) {
+        renderConfigurationScreen();
+        return;
+      }
 
-  state = hydrateState(saved || loadLegacyState());
-  const hashView = window.location.hash.slice(1);
-  if (availableViews.includes(hashView)) {
-    state.activeView = hashView;
+      const saved = (await readState(LOCAL_DB_STATE_KEY)) || loadLegacyState();
+      state = hydrateState(saved);
+      currentUser = null;
+      accessProfile = null;
+      syncMealDates();
+      syncIngredientAvailability();
+      render();
+      return;
+    }
+
+    const sessionResult = await neonClient.auth.getSession();
+    const user = getSessionUser(sessionResult);
+    if (!user) {
+      currentUser = null;
+      accessProfile = null;
+      renderAuthScreen();
+      return;
+    }
+
+    currentUser = user;
+    accessProfile = await getAccessProfile(user);
+    if (!accessProfile || accessProfile.status !== "active") {
+      renderAccessScreen(accessProfile || { status: "pending" });
+      return;
+    }
+
+    const userLocalKey = `${LOCAL_DB_STATE_KEY}:${user.id}`;
+    const [cloudSaved, userLocalSaved, legacySaved] = await Promise.all([
+      loadCloudState(user.id),
+      readState(userLocalKey),
+      readState(LOCAL_DB_STATE_KEY),
+    ]);
+
+    const saved = cloudSaved || userLocalSaved || legacySaved || loadLegacyState();
+    state = hydrateState(saved);
+    const hashView = window.location.hash.slice(1);
+    if (availableViews.includes(hashView)) {
+      state.activeView = hashView;
+    }
+    syncMealDates();
+    syncIngredientAvailability();
+    render();
+
+    if (!cloudStateExists) {
+      await persistCloudState(structuredClone(state));
+    }
+    if (!userLocalSaved && legacySaved) {
+      await writeState(state, userLocalKey);
+      await deleteState(LOCAL_DB_STATE_KEY);
+      localStorage.removeItem(STORAGE_KEY);
+    }
+  } catch (error) {
+    if (currentUser) {
+      renderAccessScreen(accessProfile || { status: "pending" }, error?.message || "Не вдалося перевірити доступ");
+    } else {
+      renderAuthScreen(error?.message || "Не вдалося з’єднатися з Neon");
+    }
+  } finally {
+    isBootstrapping = false;
   }
-  syncMealDates();
-  syncIngredientAvailability();
-  render();
 }
 
 document.querySelectorAll(".nav-item").forEach((button) => {
@@ -1774,7 +2264,7 @@ document.querySelectorAll(".nav-item").forEach((button) => {
 });
 
 document.querySelector(".brand").addEventListener("click", () => switchView("home"));
-document.querySelector("#notificationButton").addEventListener("click", requestShoppingNotification);
+document.querySelector("#accountButton").addEventListener("click", openAccountModal);
 modalBackdrop.addEventListener("click", (event) => {
   if (event.target === modalBackdrop) closeModal();
 });
@@ -1790,7 +2280,7 @@ window.addEventListener("hashchange", () => {
 });
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker.register("sw.js"));
+  window.addEventListener("load", () => navigator.serviceWorker.register("./sw.js"));
 }
 
 bootstrap();

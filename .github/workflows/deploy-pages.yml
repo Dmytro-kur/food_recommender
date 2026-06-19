@@ -26,12 +26,23 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Validate JavaScript and manifest
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate and build
+        env:
+          VITE_NEON_AUTH_URL: ${{ secrets.VITE_NEON_AUTH_URL }}
+          VITE_NEON_DATA_API_URL: ${{ secrets.VITE_NEON_DATA_API_URL }}
         run: |
-          node --check app.js
-          node --check db.js
-          node --check sw.js
-          python3 -m json.tool manifest.webmanifest >/dev/null
+          npm run check
+          python3 -m json.tool public/manifest.webmanifest >/dev/null
+          npm run build
 
       - name: Configure Pages
         uses: actions/configure-pages@v5
@@ -39,7 +50,7 @@ jobs:
       - name: Upload static site
         uses: actions/upload-pages-artifact@v5
         with:
-          path: "."
+          path: "dist"
 
       - name: Deploy to GitHub Pages
         id: deployment

@@ -78,6 +78,22 @@ select:focus-visible {
   box-shadow: 0 0 80px rgba(31, 42, 34, 0.12);
 }
 
+body.auth-mode .app-shell {
+  background:
+    radial-gradient(circle at 80% 10%, rgba(223, 240, 125, 0.34), transparent 260px),
+    var(--bg);
+}
+
+body.auth-mode .topbar,
+body.auth-mode .bottom-nav {
+  display: none;
+}
+
+body.auth-mode .main-content {
+  min-height: 100vh;
+  padding: 0;
+}
+
 .topbar {
   position: sticky;
   z-index: 20;
@@ -822,6 +838,11 @@ p {
   box-shadow: 0 0 0 4px rgba(105, 161, 120, 0.12);
 }
 
+.database-note.offline .database-dot {
+  background: var(--orange);
+  box-shadow: 0 0 0 4px rgba(232, 135, 76, 0.12);
+}
+
 .optimization-card {
   display: flex;
   align-items: center;
@@ -1348,6 +1369,224 @@ p {
   background: var(--bg);
   box-shadow: 0 -20px 60px rgba(20, 29, 23, 0.2);
   animation: sheet-in 240ms ease-out both;
+}
+
+.auth-screen {
+  display: flex;
+  min-height: 100vh;
+  flex-direction: column;
+  justify-content: center;
+  padding: 32px 20px;
+}
+
+.auth-brand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-bottom: 24px;
+  font-size: 22px;
+  font-weight: 850;
+  letter-spacing: -0.04em;
+}
+
+.auth-card {
+  width: 100%;
+  max-width: 420px;
+  margin: 0 auto;
+  padding: 25px 21px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xl);
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: var(--shadow);
+}
+
+.auth-card h1 {
+  margin-bottom: 9px;
+  font-size: 29px;
+  letter-spacing: -0.05em;
+}
+
+.auth-description {
+  margin-bottom: 21px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.auth-message {
+  margin-bottom: 15px;
+  padding: 11px 12px;
+  border: 1px solid #efd8c8;
+  border-radius: 13px;
+  background: var(--orange-soft);
+  color: #8c5744;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.auth-submit {
+  width: 100%;
+  margin-top: 5px;
+}
+
+.auth-submit:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+.auth-switch {
+  width: 100%;
+  margin-top: 17px;
+  padding: 7px;
+  border: 0;
+  background: transparent;
+  color: var(--green);
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.config-code {
+  margin: 0 0 18px;
+  padding: 14px;
+  overflow-x: auto;
+  border-radius: 14px;
+  background: #202a23;
+  color: #eaf6df;
+  font-size: 11px;
+  line-height: 1.7;
+}
+
+.access-card {
+  text-align: center;
+}
+
+.access-card .eyebrow {
+  margin-top: 10px;
+}
+
+.access-emoji {
+  display: block;
+  font-size: 46px;
+}
+
+.access-actions,
+.account-actions {
+  display: grid;
+  gap: 9px;
+}
+
+.account-status-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 17px;
+  background: var(--surface);
+}
+
+.account-avatar {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  flex: none;
+  place-items: center;
+  border-radius: 14px;
+  background: var(--green-soft);
+  color: var(--green-dark);
+  font-size: 17px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.account-status-card strong,
+.account-status-card span,
+.admin-user-head strong,
+.admin-user-head span {
+  display: block;
+}
+
+.account-status-card strong,
+.admin-user-head strong {
+  margin-bottom: 3px;
+  font-size: 13px;
+}
+
+.account-status-card span,
+.admin-user-head span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.account-actions svg {
+  width: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.modal-loading {
+  display: grid;
+  min-height: 180px;
+  place-items: center;
+}
+
+.modal-loading span {
+  width: 34px;
+  height: 34px;
+  border: 4px solid var(--green-soft);
+  border-top-color: var(--green);
+  border-radius: 50%;
+  animation: loading-spin 700ms linear infinite;
+}
+
+.admin-user-list {
+  display: grid;
+  gap: 10px;
+}
+
+.admin-user-card {
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--surface);
+}
+
+.admin-user-head {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  margin-bottom: 12px;
+}
+
+.admin-user-head > div {
+  min-width: 0;
+}
+
+.admin-user-head strong,
+.admin-user-head span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.admin-user-controls {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 9px;
+}
+
+.admin-user-controls .field {
+  margin-bottom: 9px;
+}
+
+.admin-save-user {
+  width: 100%;
 }
 
 @keyframes sheet-in {

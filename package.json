@@ -1,0 +1,21 @@
+{
+  "name": "krykhta-food-recommender",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "check": "node --check app.js && node --check db.js && node --check neon.js && node --check public/sw.js"
+  },
+  "dependencies": {
+    "@neondatabase/neon-js": "0.6.2-beta"
+  },
+  "devDependencies": {
+    "vite": "6.4.1"
+  }
+}
