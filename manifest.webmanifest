@@ -1,0 +1,18 @@
+{
+  "name": "Крихта — меню та покупки",
+  "short_name": "Крихта",
+  "description": "Дешеве меню, швидкі рецепти й розумний список покупок.",
+  "lang": "uk",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#f7f5ee",
+  "theme_color": "#2f6b4f",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
