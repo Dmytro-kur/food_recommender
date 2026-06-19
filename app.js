@@ -3,8 +3,10 @@ import { neonClient, neonConfigured } from "./neon.js";
 
 const STORAGE_KEY = "krykhta-state-v1";
 const LOCAL_DB_STATE_KEY = "state";
+const STARTER_DATA_VERSION = 2;
 
 const defaultState = {
+  dataVersion: STARTER_DATA_VERSION,
   activeView: "home",
   priority: "balance",
   selectedDay: 0,
@@ -147,6 +149,8 @@ const defaultState = {
       ],
     },
   ],
+  productCatalog: [],
+  recipeCatalog: [],
 };
 
 const cookingGuides = {
@@ -193,6 +197,284 @@ const cookingGuides = {
     "Змішай йогурт із зеленню та подай як соус.",
   ],
 };
+
+const starterProductCatalog = [
+  { id: 101, name: "Рис", amount: "500 г", price: 48, category: "Бакалія", emoji: "🍚" },
+  { id: 102, name: "Макарони", amount: "500 г", price: 46, category: "Бакалія", emoji: "🍝" },
+  { id: 103, name: "Вівсянка", amount: "500 г", price: 42, category: "Бакалія", emoji: "🥣" },
+  { id: 104, name: "Сочевиця", amount: "400 г", price: 57, category: "Бакалія", emoji: "🫘" },
+  { id: 105, name: "Кускус", amount: "400 г", price: 55, category: "Бакалія", emoji: "🌾" },
+  { id: 106, name: "Борошно", amount: "1 кг", price: 38, category: "Бакалія", emoji: "🌾" },
+  { id: 107, name: "Олія", amount: "850 мл", price: 72, category: "Бакалія", emoji: "🫗" },
+  { id: 108, name: "Томати консервовані", amount: "1 банка", price: 54, category: "Бакалія", emoji: "🥫" },
+  { id: 109, name: "Нут", amount: "1 банка", price: 49, category: "Бакалія", emoji: "🫛" },
+  { id: 110, name: "Тунець", amount: "1 банка", price: 79, category: "М’ясо та риба", emoji: "🐟" },
+  { id: 111, name: "Риба біла", amount: "500 г", price: 145, category: "М’ясо та риба", emoji: "🐟" },
+  { id: 112, name: "Фарш курячий", amount: "500 г", price: 105, category: "М’ясо та риба", emoji: "🍗" },
+  { id: 113, name: "Молоко", amount: "900 мл", price: 48, category: "Молочне", emoji: "🥛" },
+  { id: 114, name: "Сметана", amount: "300 г", price: 44, category: "Молочне", emoji: "🥛" },
+  { id: 115, name: "Кисломолочний сир", amount: "350 г", price: 78, category: "Молочне", emoji: "🧀" },
+  { id: 116, name: "Вершки", amount: "200 мл", price: 52, category: "Молочне", emoji: "🥛" },
+  { id: 117, name: "Банани", amount: "1 кг", price: 62, category: "Фрукти", emoji: "🍌" },
+  { id: 118, name: "Яблука", amount: "1 кг", price: 45, category: "Фрукти", emoji: "🍎" },
+  { id: 119, name: "Часник", amount: "1 головка", price: 14, category: "Овочі", emoji: "🧄" },
+  { id: 120, name: "Перець солодкий", amount: "500 г", price: 69, category: "Овочі", emoji: "🫑" },
+  { id: 121, name: "Кабачок", amount: "1 шт", price: 39, category: "Овочі", emoji: "🥒" },
+  { id: 122, name: "Броколі", amount: "400 г", price: 72, category: "Овочі", emoji: "🥦" },
+  { id: 123, name: "Гарбуз", amount: "1 кг", price: 38, category: "Овочі", emoji: "🎃" },
+  { id: 124, name: "Огірки", amount: "500 г", price: 52, category: "Овочі", emoji: "🥒" },
+  { id: 125, name: "Капуста", amount: "1 кг", price: 34, category: "Овочі", emoji: "🥬" },
+  { id: 126, name: "Лаваш", amount: "2 шт", price: 39, category: "Хліб", emoji: "🫓" },
+  { id: 127, name: "Лимон", amount: "1 шт", price: 18, category: "Фрукти", emoji: "🍋" },
+  { id: 128, name: "Заморожені овочі", amount: "400 г", price: 62, category: "Заморожене", emoji: "🥦" },
+  { id: 129, name: "Кукурудза", amount: "1 банка", price: 43, category: "Бакалія", emoji: "🌽" },
+  { id: 130, name: "Соєвий соус", amount: "250 мл", price: 58, category: "Соуси", emoji: "🥫" },
+];
+
+const starterRecipeCatalog = [
+  {
+    id: 1001,
+    title: "Рис з овочами та яйцем",
+    time: 18,
+    price: 45,
+    emoji: "🍚",
+    tag: "Швидка пательня",
+    ingredients: [
+      { name: "Рис", amount: "180 г" },
+      { name: "Заморожені овочі", amount: "250 г" },
+      { name: "Яйця", amount: "2 шт" },
+      { name: "Соєвий соус", amount: "2 ст. ложки" },
+    ],
+    steps: [
+      "Відвари рис до готовності та дай йому трохи охолонути.",
+      "Обсмаж заморожені овочі 6–7 хвилин на великому вогні.",
+      "Посунь овочі вбік, розбий яйця й швидко перемішай.",
+      "Додай рис і соєвий соус, прогрій усе разом ще 3 хвилини.",
+    ],
+  },
+  {
+    id: 1002,
+    title: "Паста з тунцем",
+    time: 15,
+    price: 69,
+    emoji: "🍝",
+    tag: "15 хвилин",
+    ingredients: [
+      { name: "Макарони", amount: "200 г" },
+      { name: "Тунець", amount: "1 банка" },
+      { name: "Томати консервовані", amount: "200 г" },
+      { name: "Часник", amount: "1 зубчик" },
+    ],
+    steps: [
+      "Відвари макарони у підсоленій воді.",
+      "Прогрій на пательні подрібнений часник і консервовані томати.",
+      "Додай тунець без рідини та готуй 3 хвилини.",
+      "Змішай соус із макаронами та подавай.",
+    ],
+  },
+  {
+    id: 1003,
+    title: "Сочевичне карі",
+    time: 25,
+    price: 54,
+    emoji: "🍛",
+    tag: "Ситно без м’яса",
+    ingredients: [
+      { name: "Сочевиця", amount: "200 г" },
+      { name: "Томати консервовані", amount: "250 г" },
+      { name: "Цибуля", amount: "1 шт" },
+      { name: "Морква", amount: "1 шт" },
+    ],
+    steps: [
+      "Промий сочевицю та постав варитися у двох частинах води.",
+      "Обсмаж нарізані цибулю й моркву 5 хвилин.",
+      "Додай томати, карі або улюблені спеції та тушкуй 5 хвилин.",
+      "Змішай із сочевицею й готуй до м’якості ще 8–10 хвилин.",
+    ],
+  },
+  {
+    id: 1004,
+    title: "Вівсянка з бананом",
+    time: 8,
+    price: 31,
+    emoji: "🥣",
+    tag: "Найшвидший сніданок",
+    ingredients: [
+      { name: "Вівсянка", amount: "80 г" },
+      { name: "Молоко", amount: "250 мл" },
+      { name: "Банани", amount: "1 шт" },
+    ],
+    steps: [
+      "Залий вівсянку молоком і вари 5–6 хвилин, помішуючи.",
+      "Розімни половину банана та додай у кашу.",
+      "Наріж решту банана зверху й подавай.",
+    ],
+  },
+  {
+    id: 1005,
+    title: "Шакшука",
+    time: 20,
+    price: 49,
+    emoji: "🍳",
+    tag: "Одна пательня",
+    ingredients: [
+      { name: "Яйця", amount: "4 шт" },
+      { name: "Томати консервовані", amount: "300 г" },
+      { name: "Перець солодкий", amount: "1 шт" },
+      { name: "Цибуля", amount: "1 шт" },
+    ],
+    steps: [
+      "Обсмаж нарізані цибулю та перець 5 хвилин.",
+      "Додай томати, сіль і спеції та тушкуй 7 хвилин.",
+      "Зроби заглиблення, вбий яйця й накрий кришкою.",
+      "Готуй 5–6 хвилин, щоб білок схопився.",
+    ],
+  },
+  {
+    id: 1006,
+    title: "Кускус з нутом",
+    time: 12,
+    price: 52,
+    emoji: "🥗",
+    tag: "Без варіння",
+    ingredients: [
+      { name: "Кускус", amount: "180 г" },
+      { name: "Нут", amount: "1 банка" },
+      { name: "Огірки", amount: "1 шт" },
+      { name: "Помідори", amount: "2 шт" },
+      { name: "Лимон", amount: "пів шт" },
+    ],
+    steps: [
+      "Залий кускус окропом, накрий і залиш на 7 хвилин.",
+      "Промий нут, наріж огірок і помідори.",
+      "Розпуши кускус виделкою та змішай з овочами й нутом.",
+      "Заправ лимонним соком, олією та сіллю.",
+    ],
+  },
+  {
+    id: 1007,
+    title: "Крем-суп з гарбуза",
+    time: 35,
+    price: 47,
+    emoji: "🎃",
+    tag: "На два обіди",
+    ingredients: [
+      { name: "Гарбуз", amount: "700 г" },
+      { name: "Картопля", amount: "250 г" },
+      { name: "Морква", amount: "1 шт" },
+      { name: "Вершки", amount: "100 мл" },
+    ],
+    steps: [
+      "Наріж гарбуз, картоплю та моркву кубиками.",
+      "Залий овочі водою до рівня продуктів і вари 25 хвилин.",
+      "Збий суп блендером до однорідності.",
+      "Додай вершки, сіль і прогрій ще 2 хвилини.",
+    ],
+  },
+  {
+    id: 1008,
+    title: "Салат з тунцем і квасолею",
+    time: 10,
+    price: 62,
+    emoji: "🥗",
+    tag: "Без плити",
+    ingredients: [
+      { name: "Тунець", amount: "1 банка" },
+      { name: "Квасоля", amount: "1 банка" },
+      { name: "Кукурудза", amount: "пів банки" },
+      { name: "Огірки", amount: "1 шт" },
+    ],
+    steps: [
+      "Злий рідину з тунця, квасолі та кукурудзи.",
+      "Наріж огірок невеликими кубиками.",
+      "Змішай усе, додай сіль, перець і трохи олії.",
+    ],
+  },
+  {
+    id: 1009,
+    title: "Лаваш з куркою й овочами",
+    time: 20,
+    price: 76,
+    emoji: "🌯",
+    tag: "Зручно із собою",
+    ingredients: [
+      { name: "Лаваш", amount: "2 шт" },
+      { name: "Куряче філе", amount: "250 г" },
+      { name: "Капуста", amount: "150 г" },
+      { name: "Огірки", amount: "1 шт" },
+      { name: "Йогурт", amount: "100 г" },
+    ],
+    steps: [
+      "Наріж курку смужками й обсмаж 8–10 хвилин.",
+      "Тонко нашаткуй капусту та наріж огірок.",
+      "Змасти лаваш йогуртом, виклади начинку й загорни.",
+      "Підрум’янь лаваш по 2 хвилини з кожного боку.",
+    ],
+  },
+  {
+    id: 1010,
+    title: "Сирники",
+    time: 25,
+    price: 58,
+    emoji: "🥞",
+    tag: "Домашній сніданок",
+    ingredients: [
+      { name: "Кисломолочний сир", amount: "350 г" },
+      { name: "Яйця", amount: "1 шт" },
+      { name: "Борошно", amount: "70 г" },
+      { name: "Сметана", amount: "80 г" },
+    ],
+    steps: [
+      "Змішай сир, яйце, дрібку солі та половину борошна.",
+      "Сформуй сирники й обкачай у решті борошна.",
+      "Обсмаж на малому вогні по 4–5 хвилин з кожного боку.",
+      "Подай зі сметаною.",
+    ],
+  },
+  {
+    id: 1011,
+    title: "Запечена риба з броколі",
+    time: 30,
+    price: 98,
+    emoji: "🐟",
+    tag: "Легка вечеря",
+    ingredients: [
+      { name: "Риба біла", amount: "400 г" },
+      { name: "Броколі", amount: "300 г" },
+      { name: "Лимон", amount: "пів шт" },
+      { name: "Йогурт", amount: "100 г" },
+    ],
+    steps: [
+      "Розігрій духовку до 200 градусів.",
+      "Посоли рибу, скропи лимоном і виклади у форму.",
+      "Поруч розклади броколі та запікай 20–25 хвилин.",
+      "Подай з йогуртовим соусом.",
+    ],
+  },
+  {
+    id: 1012,
+    title: "Паста з грибами у вершках",
+    time: 20,
+    price: 63,
+    emoji: "🍄",
+    tag: "Комфортна вечеря",
+    ingredients: [
+      { name: "Макарони", amount: "200 г" },
+      { name: "Печериці", amount: "250 г" },
+      { name: "Вершки", amount: "150 мл" },
+      { name: "Цибуля", amount: "1 шт" },
+    ],
+    steps: [
+      "Відвари макарони до стану аль денте.",
+      "Обсмаж цибулю та нарізані гриби 7–8 хвилин.",
+      "Додай вершки, сіль і прогрій 3 хвилини.",
+      "Змішай соус із макаронами.",
+    ],
+  },
+];
+
+defaultState.productCatalog = starterProductCatalog;
+defaultState.recipeCatalog = starterRecipeCatalog;
 
 let state = structuredClone(defaultState);
 let toastTimer;
@@ -274,11 +556,31 @@ function hydrateState(saved) {
     meals: Array.isArray(source.meals) ? source.meals : base.meals,
     shopping: Array.isArray(source.shopping) ? source.shopping : base.shopping,
     pantry: Array.isArray(source.pantry) ? source.pantry : base.pantry,
+    productCatalog: mergeStarterCatalog(source.productCatalog, base.productCatalog),
+    recipeCatalog: mergeStarterCatalog(source.recipeCatalog, base.recipeCatalog),
+    dataVersion: STARTER_DATA_VERSION,
   };
 
   hydrated.meals = hydrated.meals.map(normalizeMeal);
+  hydrated.recipeCatalog = hydrated.recipeCatalog.map(normalizeMeal);
   hydrated.selectedDay = Math.min(Math.max(Number(hydrated.selectedDay) || 0, 0), Math.max(hydrated.meals.length - 1, 0));
   return hydrated;
+}
+
+function mergeStarterCatalog(savedCatalog, starterCatalog) {
+  const saved = Array.isArray(savedCatalog) ? savedCatalog : [];
+  const merged = [...saved];
+
+  starterCatalog.forEach((starterItem) => {
+    const exists = merged.some(
+      (item) =>
+        item.id === starterItem.id ||
+        normalizeIngredientName(item.name || item.title) === normalizeIngredientName(starterItem.name || starterItem.title),
+    );
+    if (!exists) merged.push(structuredClone(starterItem));
+  });
+
+  return merged;
 }
 
 function normalizeMeal(meal) {
@@ -286,7 +588,12 @@ function normalizeMeal(meal) {
 
   return {
     ...meal,
-    ingredients: Array.isArray(meal.ingredients) ? meal.ingredients : [],
+    ingredients: Array.isArray(meal.ingredients)
+      ? meal.ingredients.map((ingredient) => ({
+          ...ingredient,
+          missing: typeof ingredient.missing === "boolean" ? ingredient.missing : true,
+        }))
+      : [],
     steps: steps?.length
       ? steps
       : [
@@ -761,6 +1068,28 @@ function renderMenu() {
       `,
     )
     .join("");
+  const catalogCards = state.recipeCatalog
+    .map(
+      (recipe) => `
+        <article class="catalog-recipe-card">
+          <div class="catalog-recipe-emoji" aria-hidden="true">${recipe.emoji}</div>
+          <div class="catalog-recipe-copy">
+            <span class="catalog-tag">${escapeHtml(recipe.tag)}</span>
+            <h3>${escapeHtml(recipe.title)}</h3>
+            <p>${recipe.time} хв · ${formatMoney(recipe.price)} · ${recipe.ingredients.length} інгредієнтів</p>
+          </div>
+          <div class="catalog-recipe-actions">
+            <button class="tiny-icon-button" type="button" data-open-recipe="${recipe.id}" aria-label="Переглянути ${escapeHtml(recipe.title)}">
+              ${icon("arrow")}
+            </button>
+            <button class="tiny-icon-button catalog-add-button" type="button" data-use-recipe="${recipe.id}" aria-label="Додати ${escapeHtml(recipe.title)} у меню">
+              ${icon("plus")}
+            </button>
+          </div>
+        </article>
+      `,
+    )
+    .join("");
 
   return `
     <section class="screen">
@@ -804,6 +1133,16 @@ function renderMenu() {
             </div>
           `
       }
+      <section class="section recipe-catalog-section">
+        <div class="section-header">
+          <div>
+            <p class="eyebrow">База страв</p>
+            <h2 class="section-title">Каталог рецептів</h2>
+          </div>
+          <span class="date-label">${state.recipeCatalog.length} рецептів</span>
+        </div>
+        <div class="catalog-recipe-list">${catalogCards}</div>
+      </section>
     </section>
   `;
 }
@@ -913,6 +1252,14 @@ function renderPantry() {
           <p>Я врахую це у наступному списку й спершу використаю те, що вже є.</p>
         </div>
       </div>
+      <button class="catalog-open-button" type="button" data-open-product-catalog>
+        <span class="catalog-open-icon">🧺</span>
+        <span>
+          <strong>Каталог продуктів</strong>
+          <small>${state.productCatalog.length} базових продуктів для швидкого додавання</small>
+        </span>
+        ${icon("arrow")}
+      </button>
       <div class="pantry-grid" id="pantryGrid">
         ${state.pantry.map(renderPantryCard).join("")}
         <button class="pantry-add" type="button" data-add-pantry>
@@ -958,6 +1305,12 @@ function bindViewEvents() {
   document.querySelectorAll("[data-open-meal]").forEach((button) => {
     button.addEventListener("click", () => openMeal(Number(button.dataset.openMeal)));
   });
+  document.querySelectorAll("[data-open-recipe]").forEach((button) => {
+    button.addEventListener("click", () => openMeal(Number(button.dataset.openRecipe)));
+  });
+  document.querySelectorAll("[data-use-recipe]").forEach((button) => {
+    button.addEventListener("click", () => openUseRecipeModal(Number(button.dataset.useRecipe)));
+  });
 
   document.querySelectorAll("[data-add-missing]").forEach((button) => {
     button.addEventListener("click", () => addMissingIngredients(Number(button.dataset.addMissing)));
@@ -991,6 +1344,7 @@ function bindViewEvents() {
 
   document.querySelector("[data-add-item]")?.addEventListener("click", () => openAddItemModal("shopping"));
   document.querySelector("[data-add-pantry]")?.addEventListener("click", () => openAddItemModal("pantry"));
+  document.querySelector("[data-open-product-catalog]")?.addEventListener("click", openProductCatalog);
   document.querySelectorAll("[data-edit-pantry]").forEach((button) => {
     button.addEventListener("click", () => openPantryItemModal(Number(button.dataset.editPantry)));
   });
@@ -1031,6 +1385,164 @@ function toggleShoppingItem(id, checked) {
   syncIngredientAvailability();
   render();
   showToast(checked ? `${item.name} — куплено` : `${item.name} повернуто у список`);
+}
+
+function findRecipeById(recipeId) {
+  return (
+    state.meals.find((entry) => entry.id === recipeId) ||
+    state.recipeCatalog.find((entry) => entry.id === recipeId) ||
+    null
+  );
+}
+
+function openUseRecipeModal(recipeId) {
+  const recipe = state.recipeCatalog.find((entry) => entry.id === recipeId);
+  if (!recipe) return;
+  const selectedMeal = state.meals[state.selectedDay];
+
+  openModal(`
+    <div class="sheet-handle"></div>
+    <div class="sheet-header">
+      <div>
+        <h2 id="modalTitle">${recipe.emoji} ${escapeHtml(recipe.title)}</h2>
+        <p>${recipe.time} хв · ${formatMoney(recipe.price)}</p>
+      </div>
+      <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
+    </div>
+    <div class="alternative-card">
+      <strong>Як додати рецепт?</strong>
+      <p>${selectedMeal ? `Заміни «${escapeHtml(selectedMeal.title)}» у вибраному дні або додай новий день у кінець плану.` : "Додай рецепт як першу страву у плані."}</p>
+    </div>
+    <div class="catalog-choice-actions">
+      ${
+        selectedMeal
+          ? `<button class="secondary-button" type="button" data-replace-with-recipe>${icon("swap")} Замінити день</button>`
+          : ""
+      }
+      <button class="primary-button" type="button" data-append-recipe>${icon("plus")} Додати в кінець</button>
+    </div>
+  `);
+
+  modalSheet.querySelector("[data-replace-with-recipe]")?.addEventListener("click", () => {
+    const current = state.meals[state.selectedDay];
+    state.meals[state.selectedDay] = normalizeMeal({
+      ...structuredClone(recipe),
+      id: current.id,
+      day: current.day,
+      shortDay: current.shortDay,
+      date: current.date,
+    });
+    syncIngredientAvailability();
+    closeModal();
+    render();
+    showToast(`У меню: ${recipe.title}`);
+  });
+
+  modalSheet.querySelector("[data-append-recipe]").addEventListener("click", () => {
+    state.meals.push(
+      normalizeMeal({
+        ...structuredClone(recipe),
+        id: Date.now(),
+      }),
+    );
+    state.selectedDay = state.meals.length - 1;
+    syncMealDates();
+    syncIngredientAvailability();
+    closeModal();
+    render();
+    showToast(`${recipe.title} додано в план`);
+  });
+}
+
+function openProductCatalog() {
+  openModal(`
+    <div class="sheet-handle"></div>
+    <div class="sheet-header">
+      <div>
+        <h2 id="modalTitle">Каталог продуктів</h2>
+        <p>${state.productCatalog.length} позицій для швидкого додавання.</p>
+      </div>
+      <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
+    </div>
+    <label class="pantry-search catalog-search">
+      ${icon("search")}
+      <input id="catalogSearch" type="search" placeholder="Знайти продукт" autocomplete="off" autofocus />
+    </label>
+    <div class="product-catalog-list">
+      ${state.productCatalog
+        .map(
+          (product) => `
+            <article class="product-catalog-card" data-catalog-product-name="${escapeHtml(product.name.toLowerCase())}">
+              <span class="product-catalog-emoji">${product.emoji}</span>
+              <span class="product-catalog-copy">
+                <strong>${escapeHtml(product.name)}</strong>
+                <small>${escapeHtml(product.amount)} · ≈ ${formatMoney(product.price)}</small>
+              </span>
+              <span class="product-catalog-actions">
+                <button type="button" data-catalog-to-pantry="${product.id}" aria-label="Додати ${escapeHtml(product.name)} у запаси">+</button>
+                <button type="button" data-catalog-to-shopping="${product.id}" aria-label="Додати ${escapeHtml(product.name)} у покупки">${icon("cart")}</button>
+              </span>
+            </article>
+          `,
+        )
+        .join("")}
+    </div>
+  `);
+
+  modalSheet.querySelector("#catalogSearch").addEventListener("input", (event) => {
+    const query = event.target.value.trim().toLowerCase();
+    modalSheet.querySelectorAll("[data-catalog-product-name]").forEach((card) => {
+      card.hidden = !card.dataset.catalogProductName.includes(query);
+    });
+  });
+  modalSheet.querySelectorAll("[data-catalog-to-pantry]").forEach((button) => {
+    button.addEventListener("click", () => addCatalogProduct(Number(button.dataset.catalogToPantry), "pantry"));
+  });
+  modalSheet.querySelectorAll("[data-catalog-to-shopping]").forEach((button) => {
+    button.addEventListener("click", () => addCatalogProduct(Number(button.dataset.catalogToShopping), "shopping"));
+  });
+}
+
+function addCatalogProduct(productId, target) {
+  const product = state.productCatalog.find((entry) => entry.id === productId);
+  if (!product) return;
+
+  if (target === "pantry") {
+    const exists = state.pantry.some(
+      (item) => normalizeIngredientName(item.name) === normalizeIngredientName(product.name),
+    );
+    if (!exists) {
+      state.pantry.push({
+        id: Date.now(),
+        name: product.name,
+        amount: product.amount,
+        emoji: product.emoji,
+        low: false,
+      });
+      syncIngredientAvailability();
+    }
+    showToast(exists ? `${product.name} уже є в запасах` : `${product.name} додано в запаси`);
+  } else {
+    const exists = state.shopping.some(
+      (item) =>
+        normalizeIngredientName(item.name) === normalizeIngredientName(product.name) &&
+        !item.checked,
+    );
+    if (!exists) {
+      state.shopping.push({
+        id: Date.now(),
+        name: product.name,
+        amount: product.amount,
+        price: product.price,
+        category: product.category,
+        checked: false,
+        urgent: false,
+      });
+    }
+    showToast(exists ? `${product.name} уже є у покупках` : `${product.name} додано у покупки`);
+  }
+
+  saveState();
 }
 
 function openPantryItemModal(itemId) {
@@ -1167,7 +1679,7 @@ function openDeletePantryModal(itemId) {
 }
 
 function addMissingIngredients(mealId) {
-  const meal = state.meals.find((entry) => entry.id === mealId);
+  const meal = findRecipeById(mealId);
   if (!meal) return;
 
   let added = 0;
@@ -1185,7 +1697,7 @@ function addMissingIngredients(mealId) {
           price: estimatePrice(ingredient.name),
           category: inferCategory(ingredient.name),
           checked: false,
-          urgent: meal.id === state.meals[0].id,
+          urgent: meal.id === state.meals[0]?.id,
         });
         added += 1;
       }
@@ -1385,7 +1897,7 @@ function openDeleteRecipeModal(mealId) {
 }
 
 function openMeal(mealId) {
-  const meal = state.meals.find((entry) => entry.id === mealId) || state.meals[0];
+  const meal = findRecipeById(mealId) || state.meals[0];
   if (!meal) return;
   const missingCount = meal.ingredients.filter((item) => item.missing).length;
 
@@ -1458,7 +1970,7 @@ function openMeal(mealId) {
 }
 
 function openCookingGuide(mealId, stepIndex = 0) {
-  const meal = state.meals.find((entry) => entry.id === mealId);
+  const meal = findRecipeById(mealId);
   if (!meal) return;
 
   const steps = meal.steps;
@@ -1511,7 +2023,7 @@ function openCookingGuide(mealId, stepIndex = 0) {
 }
 
 function openFinishCookingModal(mealId) {
-  const meal = state.meals.find((entry) => entry.id === mealId);
+  const meal = findRecipeById(mealId);
   if (!meal) return;
 
   const matchedIngredients = meal.ingredients
@@ -2008,7 +2520,7 @@ function normalizeIngredientName(name) {
 }
 
 function syncIngredientAvailability() {
-  state.meals.forEach((meal) => {
+  [...state.meals, ...state.recipeCatalog].forEach((meal) => {
     meal.ingredients.forEach((ingredient) => {
       ingredient.missing = !hasPantryIngredient(ingredient.name);
     });
@@ -2070,6 +2582,11 @@ function formatQuantity(baseValue, quantity) {
 }
 
 function inferCategory(name) {
+  const catalogMatch = state.productCatalog.find(
+    (item) => normalizeIngredientName(item.name) === normalizeIngredientName(name),
+  );
+  if (catalogMatch) return catalogMatch.category;
+
   const normalized = name.toLowerCase();
   if (["йогурт", "сир", "молоко", "вершки"].some((word) => normalized.includes(word))) return "Молочне";
   if (["кур", "м’яс", "риба"].some((word) => normalized.includes(word))) return "М’ясо та риба";
@@ -2078,6 +2595,11 @@ function inferCategory(name) {
 }
 
 function estimatePrice(name) {
+  const catalogMatch = state.productCatalog.find(
+    (item) => normalizeIngredientName(item.name) === normalizeIngredientName(name),
+  );
+  if (catalogMatch) return catalogMatch.price;
+
   const prices = {
     "Куряче філе": 96,
     Йогурт: 31,
@@ -2201,6 +2723,10 @@ async function bootstrap() {
       state = hydrateState(saved);
       currentUser = null;
       accessProfile = null;
+      const hashView = window.location.hash.slice(1);
+      if (availableViews.includes(hashView)) {
+        state.activeView = hashView;
+      }
       syncMealDates();
       syncIngredientAvailability();
       render();

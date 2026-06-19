@@ -819,6 +819,79 @@ p {
   background: var(--surface);
 }
 
+.recipe-catalog-section {
+  margin-top: 28px;
+}
+
+.catalog-recipe-list {
+  display: grid;
+  gap: 10px;
+}
+
+.catalog-recipe-card {
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr) auto;
+  gap: 11px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 19px;
+  background: var(--surface);
+}
+
+.catalog-recipe-emoji {
+  display: grid;
+  width: 54px;
+  height: 54px;
+  place-items: center;
+  border-radius: 16px;
+  background: var(--surface-soft);
+  font-size: 27px;
+}
+
+.catalog-recipe-copy {
+  min-width: 0;
+}
+
+.catalog-tag {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--green);
+  font-size: 9px;
+  font-weight: 850;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.catalog-recipe-copy h3 {
+  margin: 0 0 4px;
+  font-size: 14px;
+  letter-spacing: -0.025em;
+}
+
+.catalog-recipe-copy p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.catalog-recipe-actions {
+  display: flex;
+  gap: 5px;
+}
+
+.catalog-add-button {
+  border-color: var(--green-soft);
+  background: var(--green);
+  color: #fff;
+}
+
+.catalog-choice-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 9px;
+}
+
 .database-note {
   display: flex;
   min-width: 0;
@@ -1152,6 +1225,57 @@ p {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
+}
+
+.catalog-open-button {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) 20px;
+  gap: 11px;
+  align-items: center;
+  width: 100%;
+  margin-bottom: 14px;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--surface);
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+
+.catalog-open-icon {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border-radius: 13px;
+  background: var(--lime-soft);
+  font-size: 21px;
+}
+
+.catalog-open-button strong,
+.catalog-open-button small {
+  display: block;
+}
+
+.catalog-open-button strong {
+  margin-bottom: 3px;
+  font-size: 13px;
+}
+
+.catalog-open-button small {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.catalog-open-button > svg {
+  width: 18px;
+  fill: none;
+  stroke: var(--green);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .pantry-card {
@@ -1543,6 +1667,91 @@ p {
   border-top-color: var(--green);
   border-radius: 50%;
   animation: loading-spin 700ms linear infinite;
+}
+
+.catalog-search {
+  margin-bottom: 12px;
+}
+
+.product-catalog-list {
+  display: grid;
+  gap: 8px;
+}
+
+.product-catalog-card {
+  display: grid;
+  grid-template-columns: 43px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 11px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+}
+
+.product-catalog-emoji {
+  display: grid;
+  width: 43px;
+  height: 43px;
+  place-items: center;
+  border-radius: 13px;
+  background: var(--surface-soft);
+  font-size: 22px;
+}
+
+.product-catalog-copy {
+  min-width: 0;
+}
+
+.product-catalog-copy strong,
+.product-catalog-copy small {
+  display: block;
+}
+
+.product-catalog-copy strong {
+  margin-bottom: 3px;
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.product-catalog-copy small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.product-catalog-actions {
+  display: flex;
+  gap: 5px;
+}
+
+.product-catalog-actions button {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 1px solid var(--green-soft);
+  border-radius: 11px;
+  background: var(--green-soft);
+  color: var(--green);
+  font-size: 19px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.product-catalog-actions button:last-child {
+  background: var(--green);
+  color: #fff;
+}
+
+.product-catalog-actions svg {
+  width: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .admin-user-list {
