@@ -662,12 +662,19 @@ function renderPantry() {
 
 function renderPantryCard(item) {
   return `
-    <article class="pantry-card ${item.low ? "low" : ""}" data-pantry-name="${escapeHtml(item.name.toLowerCase())}">
+    <button
+      class="pantry-card ${item.low ? "low" : ""}"
+      type="button"
+      data-pantry-name="${escapeHtml(item.name.toLowerCase())}"
+      data-edit-pantry="${item.id}"
+      aria-label="Редагувати ${escapeHtml(item.name)}"
+    >
       <span class="stock-status ${item.low ? "low" : ""}" title="${item.low ? "Закінчується" : "Є в запасі"}"></span>
       <div class="pantry-emoji" aria-hidden="true">${item.emoji}</div>
       <h3>${escapeHtml(item.name)}</h3>
       <p>${escapeHtml(item.amount)} · ${item.low ? "закінчується" : "є в запасі"}</p>
-    </article>
+      <span class="pantry-edit-hint">${icon("edit")}</span>
+    </button>
   `;
 }
 
@@ -720,6 +727,9 @@ function bindViewEvents() {
 
   document.querySelector("[data-add-item]")?.addEventListener("click", () => openAddItemModal("shopping"));
   document.querySelector("[data-add-pantry]")?.addEventListener("click", () => openAddItemModal("pantry"));
+  document.querySelectorAll("[data-edit-pantry]").forEach((button) => {
+    button.addEventListener("click", () => openPantryItemModal(Number(button.dataset.editPantry)));
+  });
   document.querySelector("[data-clear-checked]")?.addEventListener("click", clearCheckedItems);
   document.querySelector("[data-generate-list]")?.addEventListener("click", generateShoppingList);
   document.querySelector("[data-remind]")?.addEventListener("click", requestShoppingNotification);
@@ -754,8 +764,142 @@ function toggleShoppingItem(id, checked) {
       low: false,
     });
   }
+  syncIngredientAvailability();
   render();
   showToast(checked ? `${item.name} — куплено` : `${item.name} повернуто у список`);
+}
+
+function openPantryItemModal(itemId) {
+  const item = state.pantry.find((entry) => entry.id === itemId);
+  if (!item) return;
+
+  openModal(`
+    <div class="sheet-handle"></div>
+    <div class="sheet-header">
+      <div>
+        <h2 id="modalTitle">${item.emoji} ${escapeHtml(item.name)}</h2>
+        <p>Онови залишок або перенеси продукт у покупки.</p>
+      </div>
+      <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
+    </div>
+    <form id="pantryItemForm">
+      <div class="field-grid recipe-basics">
+        <label class="field emoji-field">
+          <span>Емодзі</span>
+          <input name="emoji" type="text" maxlength="4" value="${escapeHtml(item.emoji)}" required />
+        </label>
+        <label class="field">
+          <span>Назва</span>
+          <input name="name" type="text" value="${escapeHtml(item.name)}" required autofocus />
+        </label>
+      </div>
+      <div class="field-grid">
+        <label class="field">
+          <span>Залишок</span>
+          <input name="amount" type="text" value="${escapeHtml(item.amount)}" placeholder="500 г" required />
+        </label>
+        <label class="field">
+          <span>Стан</span>
+          <select name="low">
+            <option value="false" ${item.low ? "" : "selected"}>Є вдосталь</option>
+            <option value="true" ${item.low ? "selected" : ""}>Закінчується</option>
+          </select>
+        </label>
+      </div>
+      <div class="pantry-modal-actions">
+        <button class="secondary-button" type="button" data-pantry-to-shopping>
+          ${icon("cart")} У покупки
+        </button>
+        <button class="danger-outline-button" type="button" data-delete-pantry>
+          ${icon("trash")} Видалити
+        </button>
+      </div>
+      <div class="sheet-actions">
+        <button class="secondary-button" type="button" data-close-modal>Скасувати</button>
+        <button class="primary-button" type="submit">${icon("save")} Зберегти</button>
+      </div>
+    </form>
+  `);
+
+  modalSheet.querySelector("#pantryItemForm").addEventListener("submit", (event) => {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    item.name = formData.get("name").trim();
+    item.amount = formData.get("amount").trim();
+    item.emoji = formData.get("emoji").trim() || "🥫";
+    item.low = formData.get("low") === "true";
+    syncIngredientAvailability();
+    closeModal();
+    render();
+    showToast(`${item.name} оновлено`);
+  });
+
+  modalSheet.querySelector("[data-pantry-to-shopping]").addEventListener("click", () => {
+    const form = modalSheet.querySelector("#pantryItemForm");
+    const formData = new FormData(form);
+    const name = formData.get("name").trim();
+    const amount = formData.get("amount").trim();
+    item.name = name;
+    item.amount = amount;
+    item.emoji = formData.get("emoji").trim() || "🥫";
+    item.low = true;
+    const exists = state.shopping.some(
+      (shoppingItem) => shoppingItem.name.toLowerCase() === name.toLowerCase() && !shoppingItem.checked,
+    );
+
+    if (!exists) {
+      state.shopping.push({
+        id: Date.now(),
+        name,
+        amount,
+        price: estimatePrice(name),
+        category: inferCategory(name),
+        checked: false,
+        urgent: false,
+      });
+    }
+    syncIngredientAvailability();
+    closeModal();
+    render();
+    showToast(exists ? `${name} уже є у покупках` : `${name} додано у покупки`);
+  });
+
+  modalSheet.querySelector("[data-delete-pantry]").addEventListener("click", () => {
+    openDeletePantryModal(item.id);
+  });
+}
+
+function openDeletePantryModal(itemId) {
+  const item = state.pantry.find((entry) => entry.id === itemId);
+  if (!item) return;
+
+  openModal(`
+    <div class="sheet-handle"></div>
+    <div class="sheet-header">
+      <div>
+        <h2 id="modalTitle">Видалити із запасів?</h2>
+        <p>${item.emoji} ${escapeHtml(item.name)} · ${escapeHtml(item.amount)}</p>
+      </div>
+      <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
+    </div>
+    <div class="alternative-card warning-card">
+      <strong>Рецепти одразу врахують зміну</strong>
+      <p>Інгредієнт буде позначено як відсутній і його можна буде додати у список покупок.</p>
+    </div>
+    <div class="sheet-actions">
+      <button class="secondary-button" type="button" data-keep-pantry>Залишити</button>
+      <button class="danger-button" type="button" data-confirm-pantry-delete>${icon("trash")} Видалити</button>
+    </div>
+  `);
+
+  modalSheet.querySelector("[data-keep-pantry]").addEventListener("click", () => openPantryItemModal(itemId));
+  modalSheet.querySelector("[data-confirm-pantry-delete]").addEventListener("click", () => {
+    state.pantry = state.pantry.filter((entry) => entry.id !== itemId);
+    syncIngredientAvailability();
+    closeModal();
+    render();
+    showToast(`${item.name} видалено із запасів`);
+  });
 }
 
 function addMissingIngredients(mealId) {
@@ -1095,11 +1239,90 @@ function openCookingGuide(mealId, stepIndex = 0) {
   });
   modalSheet.querySelector("[data-next-step]").addEventListener("click", () => {
     if (safeIndex === steps.length - 1) {
-      closeModal();
-      showToast("Страва готова. Смачного! 🍽️");
+      openFinishCookingModal(meal.id);
       return;
     }
     openCookingGuide(mealId, safeIndex + 1);
+  });
+}
+
+function openFinishCookingModal(mealId) {
+  const meal = state.meals.find((entry) => entry.id === mealId);
+  if (!meal) return;
+
+  const matchedIngredients = meal.ingredients
+    .map((ingredient) => ({
+      ingredient,
+      pantryItem: findPantryIngredient(ingredient.name),
+    }))
+    .filter((entry) => entry.pantryItem);
+
+  openModal(`
+    <div class="sheet-handle"></div>
+    <div class="sheet-header">
+      <div>
+        <h2 id="modalTitle">Готово! Смачного 🍽️</h2>
+        <p>Оновити залишки після ${escapeHtml(meal.title)}?</p>
+      </div>
+      <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
+    </div>
+    ${
+      matchedIngredients.length
+        ? `
+          <div class="consume-list">
+            ${matchedIngredients
+              .map(
+                ({ ingredient, pantryItem }) => `
+                  <label class="consume-item">
+                    <input class="custom-checkbox" type="checkbox" value="${pantryItem.id}" checked />
+                    <span>
+                      <strong>${escapeHtml(pantryItem.name)}</strong>
+                      <small>було ${escapeHtml(pantryItem.amount)} · використано ${escapeHtml(ingredient.amount)}</small>
+                    </span>
+                  </label>
+                `,
+              )
+              .join("")}
+          </div>
+          <p class="consume-note">Для грамів, кілограмів, літрів, мілілітрів і штук залишок рахується автоматично. Для довільних одиниць продукт буде позначено як такий, що закінчується.</p>
+        `
+        : `
+          <div class="alternative-card">
+            <strong>Немає продуктів для списання</strong>
+            <p>Жоден інгредієнт рецепта не знайдений у поточних запасах.</p>
+          </div>
+        `
+    }
+    <div class="sheet-actions">
+      <button class="secondary-button" type="button" data-finish-without-consuming>Не зараз</button>
+      ${
+        matchedIngredients.length
+          ? `<button class="primary-button" type="button" data-consume-ingredients>${icon("check")} Списати</button>`
+          : `<button class="primary-button" type="button" data-finish-without-consuming>Завершити</button>`
+      }
+    </div>
+  `);
+
+  modalSheet.querySelectorAll("[data-finish-without-consuming]").forEach((button) => {
+    button.addEventListener("click", () => {
+      closeModal();
+      showToast("Страва готова. Запаси не змінено");
+    });
+  });
+
+  modalSheet.querySelector("[data-consume-ingredients]")?.addEventListener("click", () => {
+    const selectedIds = new Set(
+      [...modalSheet.querySelectorAll(".consume-item input:checked")].map((input) => Number(input.value)),
+    );
+
+    matchedIngredients
+      .filter(({ pantryItem }) => selectedIds.has(pantryItem.id))
+      .forEach(({ pantryItem, ingredient }) => consumePantryAmount(pantryItem.id, ingredient.amount));
+
+    syncIngredientAvailability();
+    closeModal();
+    render();
+    showToast(`Запаси оновлено після «${meal.title}»`);
   });
 }
 
@@ -1189,6 +1412,7 @@ function openAddItemModal(type) {
         emoji: "🥫",
         low: formData.get("low") === "true",
       });
+      syncIngredientAvailability();
     } else {
       state.shopping.push({
         id: Date.now(),
@@ -1336,11 +1560,86 @@ function parseIngredients(value) {
 }
 
 function hasPantryIngredient(name) {
-  const normalized = name.toLowerCase().trim();
-  return state.pantry.some((item) => {
-    const pantryName = item.name.toLowerCase().trim();
+  return Boolean(findPantryIngredient(name));
+}
+
+function findPantryIngredient(name) {
+  const normalized = normalizeIngredientName(name);
+  return state.pantry.find((item) => {
+    const pantryName = normalizeIngredientName(item.name);
     return pantryName.includes(normalized) || normalized.includes(pantryName);
   });
+}
+
+function normalizeIngredientName(name) {
+  return String(name)
+    .toLowerCase()
+    .replaceAll("’", "")
+    .replaceAll("'", "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function syncIngredientAvailability() {
+  state.meals.forEach((meal) => {
+    meal.ingredients.forEach((ingredient) => {
+      ingredient.missing = !hasPantryIngredient(ingredient.name);
+    });
+  });
+}
+
+function consumePantryAmount(itemId, usedAmount) {
+  const index = state.pantry.findIndex((item) => item.id === itemId);
+  if (index < 0) return;
+
+  const item = state.pantry[index];
+  const available = parseQuantity(item.amount);
+  const used = parseQuantity(usedAmount);
+
+  if (!available || !used || available.dimension !== used.dimension) {
+    item.low = true;
+    return;
+  }
+
+  const remaining = available.baseValue - used.baseValue;
+  if (remaining <= 0.0001) {
+    state.pantry.splice(index, 1);
+    return;
+  }
+
+  item.amount = formatQuantity(remaining, available);
+  item.low = remaining / available.baseValue <= 0.35 || (available.dimension === "count" && remaining <= 2);
+}
+
+function parseQuantity(value) {
+  const normalized = String(value).toLowerCase().replace(",", ".").trim();
+  const numericMatch = normalized.match(/\d+(?:\.\d+)?/);
+  const number = normalized.includes("пів") ? 0.5 : Number(numericMatch?.[0]);
+  if (!Number.isFinite(number)) return null;
+
+  const units = [
+    { pattern: /кг/, dimension: "mass", factor: 1000, unit: "кг" },
+    { pattern: /(^|\s)г($|\s)/, dimension: "mass", factor: 1, unit: "г" },
+    { pattern: /мл/, dimension: "volume", factor: 1, unit: "мл" },
+    { pattern: /(^|\s)л($|\s)/, dimension: "volume", factor: 1000, unit: "л" },
+    { pattern: /шт/, dimension: "count", factor: 1, unit: "шт" },
+    { pattern: /банк/, dimension: "container", factor: 1, unit: "банка" },
+    { pattern: /пуч/, dimension: "bundle", factor: 1, unit: "пучка" },
+    { pattern: /скиб/, dimension: "slice", factor: 1, unit: "скибки" },
+  ];
+  const matchedUnit = units.find((entry) => entry.pattern.test(normalized));
+  if (!matchedUnit) return null;
+
+  return {
+    ...matchedUnit,
+    baseValue: number * matchedUnit.factor,
+  };
+}
+
+function formatQuantity(baseValue, quantity) {
+  const displayValue = baseValue / quantity.factor;
+  const rounded = Math.round(displayValue * 100) / 100;
+  return `${String(rounded).replace(".", ",")} ${quantity.unit}`;
 }
 
 function inferCategory(name) {
@@ -1466,6 +1765,7 @@ async function bootstrap() {
     state.activeView = hashView;
   }
   syncMealDates();
+  syncIngredientAvailability();
   render();
 }
 

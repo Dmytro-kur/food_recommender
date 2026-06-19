@@ -1,4 +1,4 @@
-const CACHE_NAME = "krykhta-shell-v4";
+const CACHE_NAME = "krykhta-shell-v5";
 const APP_SHELL = ["./", "index.html", "styles.css", "db.js", "app.js", "manifest.webmanifest", "icon.svg"];
 
 self.addEventListener("install", (event) => {
