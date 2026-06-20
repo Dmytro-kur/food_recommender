@@ -81,6 +81,20 @@ export function removeFamilyGroupMember(client, targetFamilyId, memberUserId) {
   });
 }
 
+export function listAppUsers(client) {
+  return client.rpc("list_app_users");
+}
+
+export function updateAppUserAccess(client, userId, changes) {
+  return client
+    .from("app_users")
+    .update({
+      ...changes,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("user_id", userId);
+}
+
 export function getLatestFamilyNotificationEventId(client) {
   return client.rpc("get_latest_family_notification_event_id");
 }

@@ -2,21 +2,16 @@ import { deleteState, readState, writeState } from "./db.js";
 import { neonClient, neonConfigured } from "./neon.js";
 import { LOCAL_DB_STATE_KEY, STORAGE_KEY, availableViews, defaultState } from "./app/data.js";
 import {
-  addFamilyGroupMember,
-  createFamilyGroup,
-  getFamilyGroupsErrorMessage,
   getLatestFamilyNotificationEventId,
   isFamilyGroupsUnavailable,
   isFamilyNotificationsUnavailable,
   isFamilyPurchaseRequestsUnavailable,
-  listFamilyGroupMembers,
   listFamilyGroups,
   listFamilyNotificationEvents,
   listFamilyPurchaseRequests,
   pushFamilyNotificationEvent,
-  removeFamilyGroupMember,
-  setActiveFamilyGroup,
 } from "./app/familyApi.js";
+import { createFamilyController } from "./app/familyController.js";
 import { createPurchaseRequestController } from "./app/purchaseRequests.js";
 import { escapeHtml, parseLines, pluralize } from "./app/utils.js";
 import { categoryEmoji, formatMoney, icon } from "./app/ui.js";
@@ -1878,461 +1873,6 @@ function openAddItemModal(type) {
   });
 }
 
-function openAccountModal() {
-  if (!currentUser) {
-    openModal(`
-      <div class="sheet-handle"></div>
-      <div class="sheet-header">
-        <div>
-          <h2 id="modalTitle">Локальний режим</h2>
-          <p>Дані зберігаються лише в цьому браузері.</p>
-        </div>
-        <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
-      </div>
-      <div class="alternative-card">
-        <strong>Neon не використовується</strong>
-        <p>Прибери параметр <code>?local=1</code> після налаштування змінних середовища.</p>
-      </div>
-    `);
-    return;
-  }
-
-  openModal(`
-    <div class="sheet-handle"></div>
-    <div class="sheet-header">
-      <div>
-        <h2 id="modalTitle">${escapeHtml(currentUser.name || "Акаунт")}</h2>
-        <p>${escapeHtml(currentUser.email || "")}</p>
-      </div>
-      <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
-    </div>
-    <div class="account-status-card">
-      <span class="account-avatar">${escapeHtml((currentUser.email || "U").slice(0, 1).toUpperCase())}</span>
-      <div>
-        <strong>${accessProfile?.role === "admin" ? "Адміністратор" : "Користувач"}</strong>
-        <span>Доступ: ${accessProfile?.status === "active" ? "активний" : accessProfile?.status}</span>
-        <span>Простір: ${escapeHtml(getCurrentScopeLabel())}</span>
-      </div>
-    </div>
-    <div class="account-actions">
-      <button class="secondary-button" type="button" data-manage-family>${icon("users")} Сімейні групи</button>
-      ${
-        accessProfile?.role === "admin"
-          ? `<button class="secondary-button" type="button" data-manage-users>${icon("users")} Керувати користувачами</button>`
-          : ""
-      }
-      <button class="danger-outline-button" type="button" data-account-signout>${icon("logout")} Вийти</button>
-    </div>
-  `);
-
-  modalSheet.querySelector("[data-manage-family]")?.addEventListener("click", openFamilyGroupsModal);
-  modalSheet.querySelector("[data-manage-users]")?.addEventListener("click", openAdminUsersModal);
-  modalSheet.querySelector("[data-account-signout]").addEventListener("click", async () => {
-    closeModal();
-    await signOut();
-  });
-}
-
-function describeFamilyRole(role) {
-  return role === "owner" ? "Власник" : "Учасник";
-}
-
-// Family-space management is intentionally grouped together: switching scope, membership and admin access.
-async function switchFamilyScope(targetFamilyId) {
-  const currentFamilyId = getActiveFamilyId();
-  if (currentFamilyId === targetFamilyId || (currentFamilyId === null && targetFamilyId === null)) return false;
-
-  try {
-    const result = await setActiveFamilyGroup(neonClient, targetFamilyId);
-
-    if (result.error) {
-      showToast(getFamilyGroupsErrorMessage(result.error, "Не вдалося перемкнути простір"));
-      return false;
-    }
-
-    await refreshFamilyContext();
-    await loadStateForCurrentScope();
-    await primeFamilyNotificationCursor();
-    await refreshFamilyPurchaseRequests();
-    closeModal();
-    showToast(`Активний простір: ${getCurrentScopeLabel()}`);
-    return true;
-  } catch (error) {
-    showToast(getFamilyGroupsErrorMessage(error, "Не вдалося перемкнути простір"));
-    return false;
-  }
-}
-
-async function openFamilyGroupsModal() {
-  openModal(`
-    <div class="sheet-handle"></div>
-    <div class="sheet-header">
-      <div>
-        <h2 id="modalTitle">Сімейні групи</h2>
-        <p>Завантажую простори й учасників…</p>
-      </div>
-      <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
-    </div>
-    <div class="modal-loading"><span></span></div>
-  `);
-
-  const groupsResult = await listFamilyGroups(neonClient);
-  if (groupsResult.error) {
-    openModal(`
-      <div class="sheet-handle"></div>
-      <div class="sheet-header">
-        <div>
-          <h2 id="modalTitle">Не вдалося завантажити</h2>
-          <p>${escapeHtml(getFamilyGroupsErrorMessage(groupsResult.error, "Помилка Neon Data API"))}</p>
-        </div>
-        <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
-      </div>
-    `);
-    return;
-  }
-
-  const groups = groupsResult.data || [];
-  setFamilyContext(groups);
-  const activeGroup = groups.find((group) => group.is_active) || null;
-  let members = [];
-
-  if (activeGroup) {
-    const membersResult = await listFamilyGroupMembers(neonClient, activeGroup.family_id);
-
-    if (membersResult.error) {
-      openModal(`
-        <div class="sheet-handle"></div>
-        <div class="sheet-header">
-          <div>
-            <h2 id="modalTitle">Не вдалося завантажити</h2>
-            <p>${escapeHtml(getFamilyGroupsErrorMessage(membersResult.error, "Помилка Neon Data API"))}</p>
-          </div>
-          <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
-        </div>
-      `);
-      return;
-    }
-
-    members = membersResult.data || [];
-  }
-
-  openModal(`
-    <div class="sheet-handle"></div>
-    <div class="sheet-header">
-      <div>
-        <h2 id="modalTitle">Сімейні групи</h2>
-        <p>Учасники однієї групи бачать спільні меню, рецепти, запаси й покупки.</p>
-      </div>
-      <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
-    </div>
-    <div class="alternative-card">
-      <strong>Активний простір</strong>
-      <p>${escapeHtml(getCurrentScopeLabel())}</p>
-    </div>
-    <div class="family-space-list">
-      <button class="family-space-card ${activeGroup ? "" : "active"}" type="button" data-switch-family="">
-        <strong>Особистий простір</strong>
-        <span>Дані бачиш лише ти</span>
-      </button>
-      ${groups
-        .map(
-          (group) => `
-            <button class="family-space-card ${group.is_active ? "active" : ""}" type="button" data-switch-family="${group.family_id}">
-              <strong>${escapeHtml(group.family_name)}</strong>
-              <span>${describeFamilyRole(group.membership_role)} · ${group.member_count} ${pluralize(group.member_count, "учасник", "учасники", "учасників")}</span>
-            </button>
-          `,
-        )
-        .join("")}
-    </div>
-    <form id="familyCreateForm">
-      <label class="field">
-        <span>Нова група</span>
-        <input name="familyName" type="text" placeholder="Наприклад, Родина Іваненків" maxlength="80" required />
-      </label>
-      <button class="primary-button family-modal-button" type="submit">${icon("plus")} Створити сімейний простір</button>
-    </form>
-    ${
-      activeGroup
-        ? `
-          <section class="family-members-section">
-            <div class="sheet-header family-section-header">
-              <div>
-                <h3>${escapeHtml(activeGroup.family_name)}</h3>
-                <p>${describeFamilyRole(activeGroup.membership_role)} · ${members.length} ${pluralize(members.length, "учасник", "учасники", "учасників")}</p>
-              </div>
-            </div>
-            <div class="admin-user-list">
-              ${members
-                .map(
-                  (member) => `
-                    <article class="admin-user-card">
-                      <div class="admin-user-head">
-                        <span class="account-avatar">${escapeHtml((member.email || "U").slice(0, 1).toUpperCase())}</span>
-                        <div>
-                          <strong>${escapeHtml(member.display_name || member.email)}</strong>
-                          <span>${escapeHtml(member.email)}${member.is_current_user ? " · це ти" : ""}</span>
-                        </div>
-                      </div>
-                      <div class="family-member-footer">
-                        <span class="family-role-chip">${describeFamilyRole(member.membership_role)}</span>
-                        ${
-                          activeGroup.membership_role === "owner" && !member.is_current_user
-                            ? `<button class="compact-button family-remove-button" type="button" data-remove-family-member="${escapeHtml(member.user_id)}">Прибрати</button>`
-                            : ""
-                        }
-                      </div>
-                    </article>
-                  `,
-                )
-                .join("")}
-            </div>
-            ${
-              activeGroup.membership_role === "owner"
-                ? `
-                  <form id="familyAddMemberForm">
-                    <label class="field">
-                      <span>Додати учасника за email</span>
-                      <input name="email" type="email" placeholder="member@example.com" autocomplete="email" required />
-                    </label>
-                    <button class="secondary-button family-modal-button" type="submit">${icon("plus")} Додати в групу</button>
-                  </form>
-                `
-                : `
-                  <div class="alternative-card family-readonly-card">
-                    <strong>Керування доступом</strong>
-                    <p>Змінювати склад цієї групи може лише її власник.</p>
-                  </div>
-                `
-            }
-          </section>
-        `
-        : `
-          <div class="alternative-card family-readonly-card">
-            <strong>Поки без сімейної групи</strong>
-            <p>Створи групу, якщо хочеш ділити меню, рецепти, запаси та список покупок з родиною.</p>
-          </div>
-        `
-    }
-  `);
-
-  modalSheet.querySelectorAll("[data-switch-family]").forEach((button) => {
-    button.addEventListener("click", async () => {
-      const targetFamilyId = button.dataset.switchFamily ? Number(button.dataset.switchFamily) : null;
-      if (targetFamilyId === getActiveFamilyId() || (targetFamilyId === null && getActiveFamilyId() === null)) return;
-      button.disabled = true;
-      const switched = await switchFamilyScope(targetFamilyId);
-      if (!switched) button.disabled = false;
-    });
-  });
-
-  modalSheet.querySelector("#familyCreateForm")?.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const form = event.currentTarget;
-    const submitButton = form.querySelector("button[type='submit']");
-    const formData = new FormData(form);
-    const familyName = formData.get("familyName").trim();
-    const snapshot = linkStateProducts(structuredClone(state));
-
-    submitButton.disabled = true;
-    submitButton.textContent = "Створюю…";
-
-    try {
-      const result = await createFamilyGroup(neonClient, familyName);
-
-      if (result.error) {
-        submitButton.disabled = false;
-        submitButton.innerHTML = `${icon("plus")} Створити сімейний простір`;
-        showToast(getFamilyGroupsErrorMessage(result.error, "Не вдалося створити групу"));
-        return;
-      }
-
-      await refreshFamilyContext();
-      await loadStateForCurrentScope({ seedSnapshot: snapshot });
-      await primeFamilyNotificationCursor();
-      await refreshFamilyPurchaseRequests();
-      closeModal();
-      showToast(`Створено: ${getCurrentScopeLabel()}`);
-    } catch (error) {
-      submitButton.disabled = false;
-      submitButton.innerHTML = `${icon("plus")} Створити сімейний простір`;
-      showToast(getFamilyGroupsErrorMessage(error, "Не вдалося створити групу"));
-    }
-  });
-
-  modalSheet.querySelector("#familyAddMemberForm")?.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const form = event.currentTarget;
-    const submitButton = form.querySelector("button[type='submit']");
-    const formData = new FormData(form);
-
-    submitButton.disabled = true;
-    submitButton.textContent = "Додаю…";
-
-    try {
-      const result = await addFamilyGroupMember(
-        neonClient,
-        activeGroup.family_id,
-        formData.get("email").trim(),
-      );
-
-      if (result.error) {
-        submitButton.disabled = false;
-        submitButton.innerHTML = `${icon("plus")} Додати в групу`;
-        showToast(getFamilyGroupsErrorMessage(result.error, "Не вдалося додати учасника"));
-        return;
-      }
-
-      await openFamilyGroupsModal();
-      showToast("Учасника додано");
-    } catch (error) {
-      submitButton.disabled = false;
-      submitButton.innerHTML = `${icon("plus")} Додати в групу`;
-      showToast(getFamilyGroupsErrorMessage(error, "Не вдалося додати учасника"));
-    }
-  });
-
-  modalSheet.querySelectorAll("[data-remove-family-member]").forEach((button) => {
-    button.addEventListener("click", async () => {
-      button.disabled = true;
-      button.textContent = "Прибираю…";
-
-      try {
-        const result = await removeFamilyGroupMember(
-          neonClient,
-          activeGroup.family_id,
-          button.dataset.removeFamilyMember,
-        );
-
-        if (result.error) {
-          button.disabled = false;
-          button.textContent = "Прибрати";
-          showToast(getFamilyGroupsErrorMessage(result.error, "Не вдалося прибрати учасника"));
-          return;
-        }
-
-        await openFamilyGroupsModal();
-        showToast("Учасника прибрано");
-      } catch (error) {
-        button.disabled = false;
-        button.textContent = "Прибрати";
-        showToast(getFamilyGroupsErrorMessage(error, "Не вдалося прибрати учасника"));
-      }
-    });
-  });
-}
-
-async function openAdminUsersModal() {
-  openModal(`
-    <div class="sheet-handle"></div>
-    <div class="sheet-header">
-      <div>
-        <h2 id="modalTitle">Користувачі</h2>
-        <p>Завантажую список доступів…</p>
-      </div>
-      <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
-    </div>
-    <div class="modal-loading"><span></span></div>
-  `);
-
-  const result = await neonClient.rpc("list_app_users");
-
-  if (result.error) {
-    openModal(`
-      <div class="sheet-handle"></div>
-      <div class="sheet-header">
-        <div>
-          <h2 id="modalTitle">Не вдалося завантажити</h2>
-          <p>${escapeHtml(result.error.message || "Помилка Neon Data API")}</p>
-        </div>
-        <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
-      </div>
-    `);
-    return;
-  }
-
-  const users = result.data || [];
-  openModal(`
-    <div class="sheet-handle"></div>
-    <div class="sheet-header">
-      <div>
-        <h2 id="modalTitle">Користувачі</h2>
-        <p>${users.length} ${pluralize(users.length, "акаунт", "акаунти", "акаунтів")}</p>
-      </div>
-      <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
-    </div>
-    <div class="admin-user-list">
-      ${users
-        .map((user) => {
-          const isCurrent = user.user_id === currentUser.id;
-          return `
-            <article class="admin-user-card" data-admin-user="${escapeHtml(user.user_id)}">
-              <div class="admin-user-head">
-                <span class="account-avatar">${escapeHtml((user.email || "U").slice(0, 1).toUpperCase())}</span>
-                <div>
-                  <strong>${escapeHtml(user.display_name || user.email)}</strong>
-                  <span>${escapeHtml(user.email)}${isCurrent ? " · це ти" : ""}</span>
-                </div>
-              </div>
-              <div class="admin-user-controls">
-                <label class="field">
-                  <span>Доступ</span>
-                  <select name="status" ${isCurrent ? "disabled" : ""}>
-                    <option value="pending" ${user.status === "pending" ? "selected" : ""}>Очікує</option>
-                    <option value="active" ${user.status === "active" ? "selected" : ""}>Дозволено</option>
-                    <option value="blocked" ${user.status === "blocked" ? "selected" : ""}>Заблоковано</option>
-                  </select>
-                </label>
-                <label class="field">
-                  <span>Роль</span>
-                  <select name="role" ${isCurrent ? "disabled" : ""}>
-                    <option value="user" ${user.role === "user" ? "selected" : ""}>Користувач</option>
-                    <option value="admin" ${user.role === "admin" ? "selected" : ""}>Адмін</option>
-                  </select>
-                </label>
-              </div>
-              ${
-                isCurrent
-                  ? ""
-                  : `<button class="compact-button primary admin-save-user" type="button">Зберегти доступ</button>`
-              }
-            </article>
-          `;
-        })
-        .join("")}
-    </div>
-  `);
-
-  modalSheet.querySelectorAll(".admin-save-user").forEach((button) => {
-    button.addEventListener("click", async () => {
-      const card = button.closest("[data-admin-user]");
-      button.disabled = true;
-      button.textContent = "Зберігаю…";
-      const updateResult = await neonClient
-        .from("app_users")
-        .update({
-          status: card.querySelector("[name='status']").value,
-          role: card.querySelector("[name='role']").value,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("user_id", card.dataset.adminUser);
-
-      if (updateResult.error) {
-        button.disabled = false;
-        button.textContent = "Спробувати ще";
-        showToast(updateResult.error.message || "Не вдалося змінити доступ");
-        return;
-      }
-
-      button.textContent = "Збережено ✓";
-      setTimeout(() => {
-        button.disabled = false;
-        button.textContent = "Зберегти доступ";
-      }, 1200);
-    });
-  });
-}
-
 // Generic modal and notification primitives are near the end because many features depend on them.
 function openModal(content) {
   modalSheet.innerHTML = content;
@@ -2478,6 +2018,28 @@ function showToast(message) {
   toast.classList.add("visible");
   toastTimer = setTimeout(() => toast.classList.remove("visible"), 2400);
 }
+
+// Family/account flow is split out so app.js can stay focused on data lifecycle.
+const familyController = createFamilyController({
+  neonClient,
+  modalSheet,
+  getCurrentUser: () => currentUser,
+  getAccessProfile: () => accessProfile,
+  getCurrentScopeLabel,
+  getActiveFamilyId,
+  createScopeSeedSnapshot: () => linkStateProducts(structuredClone(state)),
+  setFamilyContext,
+  refreshFamilyContext,
+  loadStateForCurrentScope,
+  primeFamilyNotificationCursor,
+  refreshFamilyPurchaseRequests,
+  openModal,
+  closeModal,
+  showToast,
+  signOut,
+});
+
+const { openAccountModal } = familyController;
 
 // Purchase-request flow is split out so app.js can stay focused on app lifecycle.
 const purchaseRequestController = createPurchaseRequestController({
