@@ -493,6 +493,78 @@ const toast = document.querySelector("#toast");
 const shoppingBadge = document.querySelector("#shoppingBadge");
 const availableViews = ["home", "menu", "shopping", "pantry"];
 
+function normalizeProductId(value) {
+  const numeric = Number(value);
+  return Number.isInteger(numeric) ? numeric : null;
+}
+
+function findCatalogProduct(target, catalog = state.productCatalog) {
+  const productId = normalizeProductId(typeof target === "object" ? target?.productId : null);
+  if (productId !== null) {
+    const exactMatch = catalog.find((item) => item.id === productId);
+    if (exactMatch) return exactMatch;
+  }
+
+  const name = typeof target === "string" ? target : target?.name;
+  if (!name) return null;
+  const normalized = normalizeIngredientName(name);
+  return catalog.find((item) => normalizeIngredientName(item.name) === normalized) || null;
+}
+
+function getProductKey(target, catalog = state.productCatalog) {
+  const catalogMatch = findCatalogProduct(target, catalog);
+  const explicitProductId = normalizeProductId(typeof target === "object" ? target?.productId : null);
+  const productId = explicitProductId ?? catalogMatch?.id ?? null;
+
+  if (productId !== null) return `product:${productId}`;
+
+  const name = typeof target === "string" ? target : target?.name;
+  if (!name) return "";
+  return `name:${normalizeIngredientName(name)}`;
+}
+
+function sameProduct(left, right, catalog = state.productCatalog) {
+  const leftKey = getProductKey(left, catalog);
+  const rightKey = getProductKey(right, catalog);
+  return Boolean(leftKey && rightKey && leftKey === rightKey);
+}
+
+function attachProductLink(entry, catalog) {
+  if (!entry?.name) return entry;
+  if (normalizeProductId(entry.productId) !== null) return entry;
+
+  const catalogMatch = findCatalogProduct(entry, catalog);
+  if (!catalogMatch) return entry;
+  return {
+    ...entry,
+    productId: catalogMatch.id,
+  };
+}
+
+function linkStateProducts(nextState) {
+  const catalog = Array.isArray(nextState.productCatalog) ? nextState.productCatalog : [];
+  const linkIngredients = (collection) =>
+    Array.isArray(collection)
+      ? collection.map((meal) => ({
+          ...meal,
+          ingredients: Array.isArray(meal.ingredients) ? meal.ingredients.map((ingredient) => attachProductLink(ingredient, catalog)) : [],
+        }))
+      : [];
+
+  return {
+    ...nextState,
+    pantry: Array.isArray(nextState.pantry) ? nextState.pantry.map((item) => attachProductLink(item, catalog)) : [],
+    shopping: Array.isArray(nextState.shopping) ? nextState.shopping.map((item) => attachProductLink(item, catalog)) : [],
+    meals: linkIngredients(nextState.meals),
+    recipeCatalog: linkIngredients(nextState.recipeCatalog),
+  };
+}
+
+function isNormalizedCloudUnavailable(error) {
+  const message = String(error?.message || "");
+  return message.includes("load_app_state") || message.includes("save_app_state") || message.includes("migrate_legacy_user_state");
+}
+
 function loadLegacyState() {
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
@@ -504,7 +576,7 @@ function loadLegacyState() {
 
 function saveState() {
   clearTimeout(saveTimer);
-  const snapshot = structuredClone(state);
+  const snapshot = linkStateProducts(structuredClone(state));
   const localKey = currentUser ? `${LOCAL_DB_STATE_KEY}:${currentUser.id}` : LOCAL_DB_STATE_KEY;
 
   saveTimer = setTimeout(async () => {
@@ -529,15 +601,14 @@ function scheduleCloudSave(snapshot) {
 async function persistCloudState(snapshot) {
   if (!neonClient || !currentUser || accessProfile?.status !== "active") return;
 
-  const payload = {
-    owner_id: currentUser.id,
-    state: snapshot,
-    updated_at: new Date().toISOString(),
-  };
+  const normalizedSnapshot = linkStateProducts(structuredClone(snapshot));
+  let result = await neonClient.rpc("save_app_state", {
+    app_state: normalizedSnapshot,
+  });
 
-  const result = cloudStateExists
-    ? await neonClient.from("user_state").update(payload).eq("owner_id", currentUser.id)
-    : await neonClient.from("user_state").insert(payload);
+  if (result.error && isNormalizedCloudUnavailable(result.error)) {
+    result = await persistLegacyCloudState(normalizedSnapshot);
+  }
 
   if (!result.error) {
     cloudStateExists = true;
@@ -564,7 +635,7 @@ function hydrateState(saved) {
   hydrated.meals = hydrated.meals.map(normalizeMeal);
   hydrated.recipeCatalog = hydrated.recipeCatalog.map(normalizeMeal);
   hydrated.selectedDay = Math.min(Math.max(Number(hydrated.selectedDay) || 0, 0), Math.max(hydrated.meals.length - 1, 0));
-  return hydrated;
+  return linkStateProducts(hydrated);
 }
 
 function mergeStarterCatalog(savedCatalog, starterCatalog) {
@@ -632,15 +703,44 @@ async function getAccessProfile(user) {
 }
 
 async function loadCloudState(userId) {
-  const result = await neonClient
+  const normalizedResult = await neonClient.rpc("load_app_state");
+  if (!normalizedResult.error) {
+    cloudStateExists = Boolean(normalizedResult.data?.has_state);
+    return cloudStateExists ? normalizedResult.data?.state || null : null;
+  }
+
+  if (!isNormalizedCloudUnavailable(normalizedResult.error)) {
+    throw normalizedResult.error;
+  }
+
+  const legacyResult = await neonClient
     .from("user_state")
     .select("state,updated_at")
     .eq("owner_id", userId)
     .limit(1);
 
-  if (result.error) throw result.error;
-  cloudStateExists = Boolean(result.data?.[0]);
-  return result.data?.[0]?.state || null;
+  if (legacyResult.error) throw legacyResult.error;
+  cloudStateExists = Boolean(legacyResult.data?.[0]);
+  return legacyResult.data?.[0]?.state || null;
+}
+
+async function persistLegacyCloudState(snapshot) {
+  const payload = {
+    owner_id: currentUser.id,
+    state: snapshot,
+    updated_at: new Date().toISOString(),
+  };
+
+  return cloudStateExists
+    ? neonClient.from("user_state").update(payload).eq("owner_id", currentUser.id)
+    : neonClient.from("user_state").insert(payload);
+}
+
+async function ensureCloudStateMigrated() {
+  const result = await neonClient.rpc("migrate_legacy_user_state");
+  if (result.error && !isNormalizedCloudUnavailable(result.error)) {
+    throw result.error;
+  }
 }
 
 function renderAuthScreen(message = "") {
@@ -1373,13 +1473,14 @@ function toggleShoppingItem(id, checked) {
   if (!item) return;
 
   item.checked = checked;
-  if (checked && !state.pantry.some((pantryItem) => pantryItem.name.toLowerCase() === item.name.toLowerCase())) {
+  if (checked && !state.pantry.some((pantryItem) => sameProduct(pantryItem, item))) {
     state.pantry.push({
       id: Date.now(),
       name: item.name,
       amount: item.amount,
       emoji: categoryEmoji(item.category),
       low: false,
+      productId: item.productId,
     });
   }
   syncIngredientAvailability();
@@ -1528,9 +1629,7 @@ function addCatalogProduct(productId, target) {
   if (!product) return;
 
   if (target === "pantry") {
-    const exists = state.pantry.some(
-      (item) => normalizeIngredientName(item.name) === normalizeIngredientName(product.name),
-    );
+    const exists = state.pantry.some((item) => sameProduct(item, product));
     if (!exists) {
       state.pantry.push({
         id: Date.now(),
@@ -1538,16 +1637,13 @@ function addCatalogProduct(productId, target) {
         amount: product.amount,
         emoji: product.emoji,
         low: false,
+        productId: product.id,
       });
       syncIngredientAvailability();
     }
     showToast(exists ? `${product.name} уже є в запасах` : `${product.name} додано в запаси`);
   } else {
-    const exists = state.shopping.some(
-      (item) =>
-        normalizeIngredientName(item.name) === normalizeIngredientName(product.name) &&
-        !item.checked,
-    );
+    const exists = state.shopping.some((item) => sameProduct(item, product) && !item.checked);
     if (!exists) {
       state.shopping.push({
         id: Date.now(),
@@ -1557,6 +1653,7 @@ function addCatalogProduct(productId, target) {
         category: product.category,
         checked: false,
         urgent: false,
+        productId: product.id,
       });
     }
     showToast(exists ? `${product.name} уже є у покупках` : `${product.name} додано у покупки`);
@@ -1624,6 +1721,7 @@ function openPantryItemModal(itemId) {
     item.amount = formData.get("amount").trim();
     item.emoji = formData.get("emoji").trim() || "🥫";
     item.low = formData.get("low") === "true";
+    item.productId = findCatalogProduct(item)?.id ?? null;
     syncIngredientAvailability();
     closeModal();
     render();
@@ -1639,19 +1737,20 @@ function openPantryItemModal(itemId) {
     item.amount = amount;
     item.emoji = formData.get("emoji").trim() || "🥫";
     item.low = true;
-    const exists = state.shopping.some(
-      (shoppingItem) => shoppingItem.name.toLowerCase() === name.toLowerCase() && !shoppingItem.checked,
-    );
+    item.productId = findCatalogProduct(item)?.id ?? null;
+    const productId = item.productId;
+    const exists = state.shopping.some((shoppingItem) => sameProduct(shoppingItem, { name, productId }) && !shoppingItem.checked);
 
     if (!exists) {
       state.shopping.push({
         id: Date.now(),
         name,
         amount,
-        price: estimatePrice(name),
-        category: inferCategory(name),
+        price: estimatePrice({ name, productId }),
+        category: inferCategory({ name, productId }),
         checked: false,
         urgent: false,
+        productId,
       });
     }
     syncIngredientAvailability();
@@ -1706,18 +1805,17 @@ function addMissingIngredients(mealId) {
   meal.ingredients
     .filter((ingredient) => ingredient.missing)
     .forEach((ingredient) => {
-      const exists = state.shopping.some(
-        (item) => item.name.toLowerCase() === ingredient.name.toLowerCase() && !item.checked,
-      );
+      const exists = state.shopping.some((item) => sameProduct(item, ingredient) && !item.checked);
       if (!exists) {
         state.shopping.push({
           id: Date.now() + added,
           name: ingredient.name,
           amount: ingredient.amount,
-          price: estimatePrice(ingredient.name),
-          category: inferCategory(ingredient.name),
+          price: estimatePrice(ingredient),
+          category: inferCategory(ingredient),
           checked: false,
           urgent: meal.id === state.meals[0]?.id,
+          productId: ingredient.productId ?? null,
         });
         added += 1;
       }
@@ -1808,7 +1906,7 @@ function openRecipeForm(mealId = null) {
     <div class="sheet-header">
       <div>
         <h2 id="modalTitle">${editing ? "Редагувати рецепт" : "Новий рецепт"}</h2>
-        <p>Дані збережуться локально на цьому телефоні.</p>
+        <p>${currentUser ? "Зміни синхронізуються з Neon після збереження." : "Дані збережуться локально на цьому телефоні."}</p>
       </div>
       <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
     </div>
@@ -1909,7 +2007,7 @@ function openDeleteRecipeModal(mealId) {
       <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
     </div>
     <div class="alternative-card warning-card">
-      <strong>Рецепт буде видалено з бази телефона</strong>
+      <strong>${currentUser ? "Рецепт буде видалено з меню та хмарного сховища" : "Рецепт буде видалено з бази телефона"}</strong>
       <p>Список уже куплених продуктів та запаси при цьому не зміняться.</p>
     </div>
     <div class="sheet-actions">
@@ -2213,15 +2311,18 @@ function openAddItemModal(type) {
     const amount = formData.get("amount").trim();
 
     if (pantryMode) {
+      const productId = findCatalogProduct(name)?.id ?? null;
       state.pantry.push({
         id: Date.now(),
         name,
         amount,
         emoji: "🥫",
         low: formData.get("low") === "true",
+        productId,
       });
       syncIngredientAvailability();
     } else {
+      const productId = findCatalogProduct(name)?.id ?? null;
       state.shopping.push({
         id: Date.now(),
         name,
@@ -2230,6 +2331,7 @@ function openAddItemModal(type) {
         category: formData.get("category"),
         checked: false,
         urgent: false,
+        productId,
       });
     }
 
@@ -2436,18 +2538,17 @@ function generateShoppingList() {
     meal.ingredients
       .filter((ingredient) => ingredient.missing)
       .forEach((ingredient) => {
-        const exists = state.shopping.some(
-          (item) => item.name.toLowerCase() === ingredient.name.toLowerCase() && !item.checked,
-        );
+        const exists = state.shopping.some((item) => sameProduct(item, ingredient) && !item.checked);
         if (!exists) {
           state.shopping.push({
             id: Date.now() + added,
             name: ingredient.name,
             amount: ingredient.amount,
-            price: estimatePrice(ingredient.name),
-            category: inferCategory(ingredient.name),
+            price: estimatePrice(ingredient),
+            category: inferCategory(ingredient),
             checked: false,
             urgent: meal.id === state.meals[0].id,
+            productId: ingredient.productId ?? null,
           });
           added += 1;
         }
@@ -2572,7 +2673,15 @@ function hasPantryIngredient(name) {
   return Boolean(findPantryIngredient(name));
 }
 
-function findPantryIngredient(name) {
+function findPantryIngredient(target) {
+  const productKey = getProductKey(target);
+  if (productKey) {
+    const exactMatch = state.pantry.find((item) => getProductKey(item) === productKey);
+    if (exactMatch) return exactMatch;
+  }
+
+  const name = typeof target === "string" ? target : target?.name;
+  if (!name) return null;
   const normalized = normalizeIngredientName(name);
   return state.pantry.find((item) => {
     const pantryName = normalizeIngredientName(item.name);
@@ -2592,7 +2701,7 @@ function normalizeIngredientName(name) {
 function syncIngredientAvailability() {
   [...state.meals, ...state.recipeCatalog].forEach((meal) => {
     meal.ingredients.forEach((ingredient) => {
-      ingredient.missing = !hasPantryIngredient(ingredient.name);
+      ingredient.missing = !hasPantryIngredient(ingredient);
     });
   });
 }
@@ -2651,12 +2760,11 @@ function formatQuantity(baseValue, quantity) {
   return `${String(rounded).replace(".", ",")} ${quantity.unit}`;
 }
 
-function inferCategory(name) {
-  const catalogMatch = state.productCatalog.find(
-    (item) => normalizeIngredientName(item.name) === normalizeIngredientName(name),
-  );
+function inferCategory(target) {
+  const catalogMatch = findCatalogProduct(target);
   if (catalogMatch) return catalogMatch.category;
 
+  const name = typeof target === "string" ? target : target?.name || "";
   const normalized = name.toLowerCase();
   if (["йогурт", "сир", "молоко", "вершки"].some((word) => normalized.includes(word))) return "Молочне";
   if (["кур", "м’яс", "риба"].some((word) => normalized.includes(word))) return "М’ясо та риба";
@@ -2664,12 +2772,11 @@ function inferCategory(name) {
   return "Овочі";
 }
 
-function estimatePrice(name) {
-  const catalogMatch = state.productCatalog.find(
-    (item) => normalizeIngredientName(item.name) === normalizeIngredientName(name),
-  );
+function estimatePrice(target) {
+  const catalogMatch = findCatalogProduct(target);
   if (catalogMatch) return catalogMatch.price;
 
+  const name = typeof target === "string" ? target : target?.name;
   const prices = {
     "Куряче філе": 96,
     Йогурт: 31,
@@ -2818,6 +2925,8 @@ async function bootstrap() {
       renderAccessScreen(accessProfile || { status: "pending" });
       return;
     }
+
+    await ensureCloudStateMigrated();
 
     const userLocalKey = `${LOCAL_DB_STATE_KEY}:${user.id}`;
     const [cloudSaved, userLocalSaved, legacySaved] = await Promise.all([
