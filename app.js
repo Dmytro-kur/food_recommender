@@ -49,6 +49,9 @@ let cloudSyncInFlight = false;
 let cloudSyncQueued = false;
 let lastSeenFamilyNotificationEventId = 0;
 let displayedFamilyNotificationKeys = new Map();
+let familyPurchaseRequests = [];
+let familyPurchaseRequestsSignature = "[]";
+let unreadFamilyActivityCount = 0;
 let authFormMode = "sign-in";
 let isBootstrapping = false;
 
@@ -138,7 +141,18 @@ function isFamilyNotificationsUnavailable(error) {
   return (
     message.includes("push_family_notification_event") ||
     message.includes("list_family_notification_events") ||
-    message.includes("get_latest_family_notification_event_id")
+    message.includes("get_latest_family_notification_event_id") ||
+    message.includes("list_family_notification_history")
+  );
+}
+
+function isFamilyPurchaseRequestsUnavailable(error) {
+  const message = String(error?.message || "");
+  return (
+    message.includes("create_family_purchase_request") ||
+    message.includes("list_family_purchase_requests") ||
+    message.includes("get_family_purchase_request_details") ||
+    message.includes("update_family_purchase_request_item")
   );
 }
 
@@ -173,6 +187,14 @@ function getFamilyGroupsErrorMessage(error, fallback) {
   return isFamilyGroupsUnavailable(error) ? "Онови neon/schema.sql у Neon Console" : error?.message || fallback;
 }
 
+function getFamilyPurchaseRequestsErrorMessage(error, fallback) {
+  return isFamilyPurchaseRequestsUnavailable(error) ? "Онови neon/schema.sql у Neon Console" : error?.message || fallback;
+}
+
+function getFamilyNotificationsErrorMessage(error, fallback) {
+  return isFamilyNotificationsUnavailable(error) ? "Онови neon/schema.sql у Neon Console" : error?.message || fallback;
+}
+
 function getSyncIndicatorLabel(status = "synced") {
   if (!currentUser) return "Локальний режим";
   return status === "offline" ? `${getCurrentScopeLabel()} · офлайн-копія` : `${getCurrentScopeLabel()} · синхронізовано`;
@@ -193,9 +215,36 @@ function clearCloudSnapshot() {
   hasPendingCloudChanges = false;
 }
 
+function setFamilyPurchaseRequests(nextRequests = []) {
+  const normalized = Array.isArray(nextRequests) ? nextRequests : [];
+  const nextSignature = JSON.stringify(normalized);
+  const changed = nextSignature !== familyPurchaseRequestsSignature;
+  familyPurchaseRequests = normalized;
+  familyPurchaseRequestsSignature = nextSignature;
+  return changed;
+}
+
+function clearFamilyPurchaseRequests() {
+  setFamilyPurchaseRequests([]);
+}
+
 function resetFamilyNotificationState() {
   lastSeenFamilyNotificationEventId = 0;
   displayedFamilyNotificationKeys = new Map();
+  unreadFamilyActivityCount = 0;
+}
+
+function updateFamilyActivityBadge() {
+  const badge = document.querySelector("[data-family-activity-badge]");
+  if (!badge) return;
+  badge.hidden = unreadFamilyActivityCount === 0;
+  badge.textContent = unreadFamilyActivityCount > 99 ? "99+" : String(unreadFamilyActivityCount);
+}
+
+function renderShoppingViewIfVisible() {
+  if (state.activeView === "shopping" && modalBackdrop.hidden && !document.body.classList.contains("auth-mode")) {
+    render();
+  }
 }
 
 function getCurrentStateSnapshot(source = state) {
@@ -438,6 +487,32 @@ async function primeFamilyNotificationCursor() {
 
   lastSeenFamilyNotificationEventId = Number(result.data) || 0;
   displayedFamilyNotificationKeys.clear();
+  unreadFamilyActivityCount = 0;
+  updateFamilyActivityBadge();
+}
+
+async function refreshFamilyPurchaseRequests({ renderIfChanged = false } = {}) {
+  if (!neonClient || !currentUser || accessProfile?.status !== "active" || isPersonalScope()) {
+    const changed = setFamilyPurchaseRequests([]);
+    if (changed && renderIfChanged) renderShoppingViewIfVisible();
+    return;
+  }
+
+  const result = await neonClient.rpc("list_family_purchase_requests", {
+    target_family_id: getActiveFamilyId(),
+  });
+
+  if (result.error) {
+    if (isFamilyPurchaseRequestsUnavailable(result.error)) {
+      const changed = setFamilyPurchaseRequests([]);
+      if (changed && renderIfChanged) renderShoppingViewIfVisible();
+      return;
+    }
+    throw result.error;
+  }
+
+  const changed = setFamilyPurchaseRequests(result.data || []);
+  if (changed && renderIfChanged) renderShoppingViewIfVisible();
 }
 
 async function loadCloudState(userId, targetFamilyId = getActiveFamilyId()) {
@@ -666,6 +741,8 @@ async function syncSharedNotifications() {
 
   lastSeenFamilyNotificationEventId =
     Number(events[events.length - 1]?.event_id) || lastSeenFamilyNotificationEventId;
+  unreadFamilyActivityCount += events.length;
+  updateFamilyActivityBadge();
 
   const freshEvents = events.filter((event) => shouldDisplayFamilyNotification(event));
   if (!freshEvents.length) return;
@@ -731,6 +808,14 @@ function requestCloudSync(reason = "manual") {
       await syncSharedNotifications();
     } catch {
       // Notification polling should not surface as a sync error.
+    }
+
+    try {
+      await refreshFamilyPurchaseRequests({
+        renderIfChanged: !document.hidden,
+      });
+    } catch {
+      // Purchase request polling should not break the main app loop.
     }
   })()
     .finally(() => {
@@ -822,6 +907,7 @@ async function signOut() {
   setFamilyContext();
   clearCloudSnapshot();
   cloudStateExists = false;
+  clearFamilyPurchaseRequests();
   resetFamilyNotificationState();
   authFormMode = "sign-in";
   renderAuthScreen();
@@ -839,7 +925,13 @@ function render() {
   const renderers = {
     home: () => renderHomeView(state),
     menu: () => renderMenuView(state, currentUser, getSyncIndicatorLabel("synced")),
-    shopping: () => renderShoppingView(state),
+    shopping: () =>
+      renderShoppingView(state, {
+        familyMode: Boolean(currentUser && !isPersonalScope()),
+        familyLabel: getCurrentScopeLabel(),
+        purchaseRequests: familyPurchaseRequests,
+        unreadActivityCount: unreadFamilyActivityCount,
+      }),
     pantry: () => renderPantryView(state),
   };
 
@@ -850,6 +942,7 @@ function render() {
   shoppingBadge.textContent = remainingItems().length;
   shoppingBadge.hidden = remainingItems().length === 0;
   bindViewEvents();
+  updateFamilyActivityBadge();
   saveState();
 }
 
@@ -915,6 +1008,11 @@ function bindViewEvents() {
   document.querySelector("[data-clear-checked]")?.addEventListener("click", clearCheckedItems);
   document.querySelector("[data-generate-list]")?.addEventListener("click", generateShoppingList);
   document.querySelector("[data-remind]")?.addEventListener("click", requestShoppingNotification);
+  document.querySelector("[data-create-purchase-request]")?.addEventListener("click", openCreatePurchaseRequestModal);
+  document.querySelector("[data-open-family-activity]")?.addEventListener("click", openFamilyActivityModal);
+  document.querySelectorAll("[data-open-purchase-request]").forEach((button) => {
+    button.addEventListener("click", () => openPurchaseRequestDetails(Number(button.dataset.openPurchaseRequest)));
+  });
 
   document.querySelector("#pantrySearch")?.addEventListener("input", (event) => {
     const query = event.target.value.trim().toLowerCase();
@@ -962,6 +1060,528 @@ function publishShoppingListNotification(addedCount) {
     url: "#shopping",
     dedupeKey: "shopping-list-updated",
     cooldownSeconds: 240,
+  });
+}
+
+function describePurchaseRequestStatus(status) {
+  if (status === "completed") return "Усе куплено";
+  if (status === "partially_completed") return "Частково виконано";
+  if (status === "in_progress") return "У процесі";
+  if (status === "cancelled") return "Скасовано";
+  return "Відкрито";
+}
+
+function describePurchaseItemStatus(status) {
+  if (status === "bought") return "Куплено";
+  if (status === "not_bought") return "Не куплено";
+  return "Очікує";
+}
+
+function formatDateTimeLabel(value) {
+  if (!value) return "щойно";
+
+  try {
+    return new Intl.DateTimeFormat("uk-UA", {
+      day: "2-digit",
+      month: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    }).format(new Date(value));
+  } catch {
+    return value;
+  }
+}
+
+function getPurchaseRequestStatusClass(status) {
+  if (status === "completed") return "resolved";
+  if (status === "partially_completed") return "warning";
+  if (status === "in_progress") return "active";
+  if (status === "cancelled") return "muted";
+  return "idle";
+}
+
+function getPurchaseItemStatusClass(status) {
+  if (status === "bought") return "resolved";
+  if (status === "not_bought") return "warning";
+  return "idle";
+}
+
+function findShoppingItemForRequestItem(requestItem, { includeChecked = false } = {}) {
+  const directItemId = Number(requestItem?.shopping_item_id);
+  if (Number.isInteger(directItemId)) {
+    const directMatch = state.shopping.find((entry) => entry.id === directItemId);
+    if (directMatch && (includeChecked || !directMatch.checked)) return directMatch;
+  }
+
+  const target = {
+    name: requestItem?.item_name,
+    productId: requestItem?.product_id ?? null,
+  };
+
+  return (
+    state.shopping.find((entry) => (includeChecked || !entry.checked) && sameProduct(entry, target)) ||
+    state.shopping.find(
+      (entry) =>
+        (includeChecked || !entry.checked) &&
+        entry.name.trim().toLowerCase() === String(requestItem?.item_name || "").trim().toLowerCase(),
+    ) ||
+    null
+  );
+}
+
+function applyBoughtRequestItemToShoppingState(requestItem, { showLocalToast = false } = {}) {
+  const shoppingItem = findShoppingItemForRequestItem(requestItem);
+  if (!shoppingItem || shoppingItem.checked) return false;
+
+  shoppingItem.checked = true;
+  if (!state.pantry.some((pantryItem) => sameProduct(pantryItem, shoppingItem))) {
+    state.pantry.push({
+      id: Date.now(),
+      name: shoppingItem.name,
+      amount: shoppingItem.amount,
+      emoji: categoryEmoji(shoppingItem.category),
+      low: false,
+      productId: shoppingItem.productId ?? null,
+    });
+  }
+
+  syncIngredientAvailability();
+  render();
+
+  if (showLocalToast) {
+    showToast(`У спільному списку відмічено: ${shoppingItem.name}`);
+  }
+
+  return true;
+}
+
+function buildRequestTitleDefault() {
+  try {
+    const dateLabel = new Intl.DateTimeFormat("uk-UA", {
+      day: "2-digit",
+      month: "2-digit",
+    }).format(new Date());
+    return `Покупки на ${dateLabel}`;
+  } catch {
+    return "Покупки на тиждень";
+  }
+}
+
+function renderPurchaseRequestDetailItems(items = []) {
+  return items
+    .map((item) => {
+      const priceLabel = Number(item.expected_price) > 0 ? formatMoney(item.expected_price) : "";
+      const noteMarkup = item.resolution_note
+        ? `<p class="purchase-request-item-note">Коментар: ${escapeHtml(item.resolution_note)}</p>`
+        : "";
+      const reasonMarkup = item.not_bought_reason
+        ? `<p class="purchase-request-item-reason">Причина: ${escapeHtml(item.not_bought_reason)}</p>`
+        : "";
+      const resolverMarkup = item.resolver_display_name
+        ? `<span>${escapeHtml(item.resolver_display_name)} · ${formatDateTimeLabel(item.resolved_at || item.updated_at)}</span>`
+        : `<span>${formatDateTimeLabel(item.updated_at)}</span>`;
+      const buttonLabel = item.item_status === "bought" ? "Коментар" : item.item_status === "not_bought" ? "Оновити" : "Статус";
+
+      return `
+        <article class="purchase-request-item-card">
+          <div class="purchase-request-item-head">
+            <div>
+              <strong>${escapeHtml(item.item_name)}</strong>
+              <span>${escapeHtml(item.amount)}${priceLabel ? ` · ${priceLabel}` : ""}</span>
+            </div>
+            <span class="purchase-request-status ${getPurchaseItemStatusClass(item.item_status)}">${describePurchaseItemStatus(item.item_status)}</span>
+          </div>
+          <div class="purchase-request-item-meta">
+            ${resolverMarkup}
+          </div>
+          ${noteMarkup}
+          ${reasonMarkup}
+          <button class="compact-button purchase-request-open" type="button" data-update-request-item="${item.request_item_id}">
+            ${icon("edit")} ${buttonLabel}
+          </button>
+        </article>
+      `;
+    })
+    .join("");
+}
+
+async function openCreatePurchaseRequestModal() {
+  if (isPersonalScope()) {
+    showToast("Створи або обери сімейний простір для спільних запитів");
+    return;
+  }
+
+  const requestableItems = remainingItems();
+  if (!requestableItems.length) {
+    showToast("У списку немає активних покупок для запиту");
+    return;
+  }
+
+  openModal(`
+    <div class="sheet-handle"></div>
+    <div class="sheet-header">
+      <div>
+        <h2 id="modalTitle">Новий запит</h2>
+        <p>${escapeHtml(getCurrentScopeLabel())} · вибери, що саме треба купити</p>
+      </div>
+      <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
+    </div>
+    <form id="purchaseRequestForm">
+      <label class="field">
+        <span>Назва запиту</span>
+        <input name="requestTitle" type="text" maxlength="120" value="${escapeHtml(buildRequestTitleDefault())}" required autofocus />
+      </label>
+      <label class="field">
+        <span>Коментар для сім'ї</span>
+        <textarea name="requestNote" rows="3" placeholder="Наприклад, магазин біля дому або дедлайн до вечора"></textarea>
+      </label>
+      <div class="purchase-request-picker">
+        ${requestableItems
+          .map(
+            (item) => `
+              <label class="purchase-request-pick">
+                <input type="checkbox" name="selectedItem" value="${item.id}" checked />
+                <span>
+                  <strong>${escapeHtml(item.name)}</strong>
+                  <small>${escapeHtml(item.amount)} · ${formatMoney(item.price)}</small>
+                </span>
+              </label>
+            `,
+          )
+          .join("")}
+      </div>
+      <div class="sheet-actions">
+        <button class="secondary-button" type="button" data-close-modal>Скасувати</button>
+        <button class="primary-button" type="submit">${icon("save")} Створити запит</button>
+      </div>
+    </form>
+  `);
+
+  modalSheet.querySelector("#purchaseRequestForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const submitButton = form.querySelector("button[type='submit']");
+    const formData = new FormData(form);
+    const selectedIds = formData.getAll("selectedItem").map((value) => Number(value));
+    const selectedItems = requestableItems.filter((item) => selectedIds.includes(item.id));
+
+    if (!selectedItems.length) {
+      showToast("Обери хоча б одну позицію");
+      return;
+    }
+
+    submitButton.disabled = true;
+    submitButton.textContent = "Створюю…";
+
+    try {
+      const result = await neonClient.rpc("create_family_purchase_request", {
+        request_title: formData.get("requestTitle").trim(),
+        request_note: formData.get("requestNote").trim(),
+        items: selectedItems.map((item) => ({
+          shoppingItemId: item.id,
+          productId: item.productId ?? null,
+          name: item.name,
+          amount: item.amount,
+          category: item.category,
+          price: item.price,
+        })),
+        target_family_id: getActiveFamilyId(),
+      });
+
+      if (result.error) {
+        submitButton.disabled = false;
+        submitButton.innerHTML = `${icon("save")} Створити запит`;
+        showToast(getFamilyPurchaseRequestsErrorMessage(result.error, "Не вдалося створити запит"));
+        return;
+      }
+
+      await refreshFamilyPurchaseRequests({ renderIfChanged: true });
+      closeModal();
+      renderShoppingViewIfVisible();
+      showToast("Запит на покупки створено");
+    } catch (error) {
+      submitButton.disabled = false;
+      submitButton.innerHTML = `${icon("save")} Створити запит`;
+      showToast(getFamilyPurchaseRequestsErrorMessage(error, "Не вдалося створити запит"));
+    }
+  });
+}
+
+async function openFamilyActivityModal() {
+  if (isPersonalScope()) {
+    showToast("Історія дій доступна лише в сімейному просторі");
+    return;
+  }
+
+  openModal(`
+    <div class="sheet-handle"></div>
+    <div class="sheet-header">
+      <div>
+        <h2 id="modalTitle">Дії сім'ї</h2>
+        <p>Завантажую останні оновлення…</p>
+      </div>
+      <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
+    </div>
+    <div class="modal-loading"><span></span></div>
+  `);
+
+  try {
+    const result = await neonClient.rpc("list_family_notification_history", {
+      target_family_id: getActiveFamilyId(),
+      limit_count: 60,
+    });
+
+    if (result.error) {
+      openModal(`
+        <div class="sheet-handle"></div>
+        <div class="sheet-header">
+          <div>
+            <h2 id="modalTitle">Не вдалося завантажити</h2>
+            <p>${escapeHtml(getFamilyNotificationsErrorMessage(result.error, "Помилка Neon Data API"))}</p>
+          </div>
+          <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
+        </div>
+      `);
+      return;
+    }
+
+    unreadFamilyActivityCount = 0;
+    updateFamilyActivityBadge();
+
+    const events = Array.isArray(result.data) ? result.data : [];
+    openModal(`
+      <div class="sheet-handle"></div>
+      <div class="sheet-header">
+        <div>
+          <h2 id="modalTitle">Дії сім'ї</h2>
+          <p>${escapeHtml(getCurrentScopeLabel())} · ${events.length} записів</p>
+        </div>
+        <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
+      </div>
+      ${
+        events.length
+          ? `<div class="family-activity-list">
+              ${events
+                .map(
+                  (activity) => `
+                    <article class="family-activity-card">
+                      <div class="family-activity-head">
+                        <strong>${escapeHtml(activity.title)}</strong>
+                        <span>${formatDateTimeLabel(activity.created_at)}</span>
+                      </div>
+                      <p>${escapeHtml(activity.body)}</p>
+                      <small>${escapeHtml(activity.actor_display_name || "Хтось")}</small>
+                    </article>
+                  `,
+                )
+                .join("")}
+            </div>`
+          : `
+            <div class="empty-state">
+              <span class="empty-state-emoji">🔔</span>
+              <h3>Поки без подій</h3>
+              <p>Тут будуть з'являтися дії сім'ї, поки тебе не було в апці.</p>
+            </div>
+          `
+      }
+    `);
+  } catch (error) {
+    openModal(`
+      <div class="sheet-handle"></div>
+      <div class="sheet-header">
+        <div>
+          <h2 id="modalTitle">Не вдалося завантажити</h2>
+          <p>${escapeHtml(getFamilyNotificationsErrorMessage(error, "Помилка Neon Data API"))}</p>
+        </div>
+        <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
+      </div>
+    `);
+  }
+}
+
+async function openPurchaseRequestDetails(requestId) {
+  openModal(`
+    <div class="sheet-handle"></div>
+    <div class="sheet-header">
+      <div>
+        <h2 id="modalTitle">Запит на покупки</h2>
+        <p>Завантажую деталі…</p>
+      </div>
+      <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
+    </div>
+    <div class="modal-loading"><span></span></div>
+  `);
+
+  try {
+    const result = await neonClient.rpc("get_family_purchase_request_details", {
+      target_request_id: requestId,
+    });
+
+    if (result.error) {
+      openModal(`
+        <div class="sheet-handle"></div>
+        <div class="sheet-header">
+          <div>
+            <h2 id="modalTitle">Не вдалося завантажити</h2>
+            <p>${escapeHtml(getFamilyPurchaseRequestsErrorMessage(result.error, "Помилка Neon Data API"))}</p>
+          </div>
+          <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
+        </div>
+      `);
+      return;
+    }
+
+    const request = result.data || {};
+    const items = Array.isArray(request.items) ? request.items : [];
+
+    openModal(`
+      <div class="sheet-handle"></div>
+      <div class="sheet-header">
+        <div>
+          <h2 id="modalTitle">${escapeHtml(request.request_title || "Запит")}</h2>
+          <p>${escapeHtml(request.creator_display_name || "Хтось")} · ${formatDateTimeLabel(request.updated_at || request.created_at)}</p>
+        </div>
+        <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
+      </div>
+      <div class="purchase-request-summary-card">
+        <div class="purchase-request-summary-row">
+          <span class="purchase-request-status ${getPurchaseRequestStatusClass(request.status)}">${describePurchaseRequestStatus(request.status)}</span>
+          <strong>${request.bought_items || 0} з ${request.total_items || 0} куплено</strong>
+        </div>
+        <div class="purchase-request-summary-grid">
+          <span>Очікує: ${request.pending_items || 0}</span>
+          <span>Не куплено: ${request.not_bought_items || 0}</span>
+        </div>
+        ${
+          request.request_note
+            ? `<p class="purchase-request-summary-note">${escapeHtml(request.request_note)}</p>`
+            : ""
+        }
+      </div>
+      <div class="purchase-request-detail-list">
+        ${items.length ? renderPurchaseRequestDetailItems(items) : `<div class="empty-state"><span class="empty-state-emoji">🧺</span><h3>Позицій немає</h3><p>У цьому запиті ще немає товарів.</p></div>`}
+      </div>
+    `);
+
+    const requestTitle = request.request_title || "Запит";
+    modalSheet.querySelectorAll("[data-update-request-item]").forEach((button) => {
+      const item = items.find((entry) => entry.request_item_id === Number(button.dataset.updateRequestItem));
+      if (!item) return;
+      button.addEventListener("click", () => openPurchaseRequestItemStatusModal(requestId, requestTitle, item));
+    });
+  } catch (error) {
+    openModal(`
+      <div class="sheet-handle"></div>
+      <div class="sheet-header">
+        <div>
+          <h2 id="modalTitle">Не вдалося завантажити</h2>
+          <p>${escapeHtml(getFamilyPurchaseRequestsErrorMessage(error, "Помилка Neon Data API"))}</p>
+        </div>
+        <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
+      </div>
+    `);
+  }
+}
+
+function syncRequestItemStatusForm(form, lockedBought = false) {
+  const statusSelect = form.querySelector("[name='itemStatus']");
+  const reasonField = form.querySelector("[data-not-bought-reason-field]");
+  const reasonInput = form.querySelector("[name='notBoughtReason']");
+
+  const sync = () => {
+    const isNotBought = !lockedBought && statusSelect.value === "not_bought";
+    reasonField.hidden = !isNotBought;
+    reasonInput.required = isNotBought;
+    if (!isNotBought) {
+      reasonInput.value = "";
+    }
+  };
+
+  statusSelect?.addEventListener("change", sync);
+  sync();
+}
+
+async function openPurchaseRequestItemStatusModal(requestId, requestTitle, item) {
+  const statusLocked = item.item_status === "bought";
+  const statusOptions = statusLocked
+    ? `<option value="bought" selected>Куплено</option>`
+    : `
+      <option value="pending" ${item.item_status === "pending" ? "selected" : ""}>Очікує</option>
+      <option value="bought" ${item.item_status === "bought" ? "selected" : ""}>Куплено</option>
+      <option value="not_bought" ${item.item_status === "not_bought" ? "selected" : ""}>Не куплено</option>
+    `;
+
+  openModal(`
+    <div class="sheet-handle"></div>
+    <div class="sheet-header">
+      <div>
+        <h2 id="modalTitle">${escapeHtml(item.item_name)}</h2>
+        <p>${escapeHtml(requestTitle)} · ${escapeHtml(item.amount)}</p>
+      </div>
+      <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
+    </div>
+    <form id="purchaseRequestItemForm">
+      <label class="field">
+        <span>Статус</span>
+        <select name="itemStatus" ${statusLocked ? "disabled" : ""}>
+          ${statusOptions}
+        </select>
+      </label>
+      <label class="field">
+        <span>${statusLocked ? "Коментар до покупки" : "Коментар"}</span>
+        <textarea name="resolutionNote" rows="3" placeholder="Наприклад, купив в АТБ або буде завтра">${escapeHtml(item.resolution_note || "")}</textarea>
+      </label>
+      <label class="field" data-not-bought-reason-field ${item.item_status === "not_bought" ? "" : "hidden"}>
+        <span>Причина, чому не куплено</span>
+        <textarea name="notBoughtReason" rows="3" placeholder="Наприклад, не було в наявності">${escapeHtml(item.not_bought_reason || "")}</textarea>
+      </label>
+      <div class="sheet-actions">
+        <button class="secondary-button" type="button" data-back-to-request>Назад</button>
+        <button class="primary-button" type="submit">${icon("save")} Зберегти</button>
+      </div>
+    </form>
+  `);
+
+  const form = modalSheet.querySelector("#purchaseRequestItemForm");
+  syncRequestItemStatusForm(form, statusLocked);
+  modalSheet.querySelector("[data-back-to-request]")?.addEventListener("click", () => openPurchaseRequestDetails(requestId));
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const submitButton = form.querySelector("button[type='submit']");
+    const formData = new FormData(form);
+    const nextStatus = statusLocked ? "bought" : formData.get("itemStatus");
+
+    submitButton.disabled = true;
+    submitButton.textContent = "Зберігаю…";
+
+    try {
+      const result = await neonClient.rpc("update_family_purchase_request_item", {
+        target_request_item_id: item.request_item_id,
+        item_status: nextStatus,
+        resolution_note: formData.get("resolutionNote").trim(),
+        not_bought_reason: formData.get("notBoughtReason").trim(),
+      });
+
+      if (result.error) {
+        submitButton.disabled = false;
+        submitButton.innerHTML = `${icon("save")} Зберегти`;
+        showToast(getFamilyPurchaseRequestsErrorMessage(result.error, "Не вдалося оновити позицію"));
+        return;
+      }
+
+      if (result.data?.status === "bought" || nextStatus === "bought") {
+        applyBoughtRequestItemToShoppingState(item);
+      }
+
+      await refreshFamilyPurchaseRequests({ renderIfChanged: true });
+      await openPurchaseRequestDetails(requestId);
+      showToast("Статус позиції оновлено");
+    } catch (error) {
+      submitButton.disabled = false;
+      submitButton.innerHTML = `${icon("save")} Зберегти`;
+      showToast(getFamilyPurchaseRequestsErrorMessage(error, "Не вдалося оновити позицію"));
+    }
   });
 }
 
@@ -1891,6 +2511,8 @@ async function switchFamilyScope(targetFamilyId) {
 
     await refreshFamilyContext();
     await loadStateForCurrentScope();
+    await primeFamilyNotificationCursor();
+    await refreshFamilyPurchaseRequests();
     closeModal();
     showToast(`Активний простір: ${getCurrentScopeLabel()}`);
     return true;
@@ -2090,6 +2712,8 @@ async function openFamilyGroupsModal() {
 
       await refreshFamilyContext();
       await loadStateForCurrentScope({ seedSnapshot: snapshot });
+      await primeFamilyNotificationCursor();
+      await refreshFamilyPurchaseRequests();
       closeModal();
       showToast(`Створено: ${getCurrentScopeLabel()}`);
     } catch (error) {
@@ -2430,6 +3054,7 @@ async function bootstrap() {
     if (!neonConfigured) {
       stopCloudSyncLoop();
       clearCloudSnapshot();
+      clearFamilyPurchaseRequests();
       resetFamilyNotificationState();
       if (!localMode) {
         renderConfigurationScreen();
@@ -2456,6 +3081,7 @@ async function bootstrap() {
     if (!user) {
       stopCloudSyncLoop();
       clearCloudSnapshot();
+      clearFamilyPurchaseRequests();
       resetFamilyNotificationState();
       currentUser = null;
       accessProfile = null;
@@ -2469,6 +3095,7 @@ async function bootstrap() {
     if (!accessProfile || accessProfile.status !== "active") {
       stopCloudSyncLoop();
       clearCloudSnapshot();
+      clearFamilyPurchaseRequests();
       resetFamilyNotificationState();
       setFamilyContext();
       renderAccessScreen(accessProfile || { status: "pending" });
@@ -2479,6 +3106,7 @@ async function bootstrap() {
     await refreshFamilyContext();
     await loadStateForCurrentScope();
     await primeFamilyNotificationCursor();
+    await refreshFamilyPurchaseRequests();
     startCloudSyncLoop();
   } catch (error) {
     if (currentUser) {

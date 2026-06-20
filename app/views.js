@@ -401,7 +401,75 @@ export function renderMenuView(state, currentUser, syncLabel = currentUser ? "С
   `;
 }
 
-export function renderShoppingView(state) {
+function describePurchaseRequestStatus(status) {
+  if (status === "completed") return "Усе куплено";
+  if (status === "partially_completed") return "Частково";
+  if (status === "in_progress") return "У процесі";
+  if (status === "cancelled") return "Скасовано";
+  return "Відкрито";
+}
+
+function getPurchaseRequestStatusClass(status) {
+  if (status === "completed") return "resolved";
+  if (status === "partially_completed") return "warning";
+  if (status === "in_progress") return "active";
+  if (status === "cancelled") return "muted";
+  return "idle";
+}
+
+function formatDateTimeLabel(value) {
+  if (!value) return "щойно";
+
+  try {
+    return new Intl.DateTimeFormat("uk-UA", {
+      day: "2-digit",
+      month: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    }).format(new Date(value));
+  } catch {
+    return value;
+  }
+}
+
+function renderPurchaseRequestCard(request) {
+  const noteMarkup = request.request_note
+    ? `<p class="purchase-request-note">${escapeHtml(request.request_note)}</p>`
+    : "";
+
+  return `
+    <article class="purchase-request-card">
+      <div class="purchase-request-head">
+        <div>
+          <strong>${escapeHtml(request.request_title)}</strong>
+          <span>${escapeHtml(request.creator_display_name || "Хтось")} · ${formatDateTimeLabel(request.updated_at)}</span>
+        </div>
+        <span class="purchase-request-status ${getPurchaseRequestStatusClass(request.status)}">${describePurchaseRequestStatus(request.status)}</span>
+      </div>
+      ${noteMarkup}
+      <div class="purchase-request-stats">
+        <span>Куплено ${request.bought_items} з ${request.total_items}</span>
+        <span>Очікує ${request.pending_items}</span>
+        ${
+          request.not_bought_items
+            ? `<span>Не куплено ${request.not_bought_items}</span>`
+            : ""
+        }
+      </div>
+      <button class="compact-button purchase-request-open" type="button" data-open-purchase-request="${request.request_id}">
+        ${icon("arrow")} Деталі
+      </button>
+    </article>
+  `;
+}
+
+export function renderShoppingView(state, context = {}) {
+  const {
+    familyMode = false,
+    familyLabel = "Сімейний простір",
+    purchaseRequests = [],
+    unreadActivityCount = 0,
+  } = context;
   const grouped = state.shopping.reduce((groups, item) => {
     groups[item.category] ||= [];
     groups[item.category].push(item);
@@ -438,6 +506,42 @@ export function renderShoppingView(state) {
       `,
     )
     .join("");
+  const purchaseRequestsMarkup = purchaseRequests.length
+    ? purchaseRequests.map(renderPurchaseRequestCard).join("")
+    : `
+      <div class="empty-state purchase-request-empty">
+        <span class="empty-state-emoji">🧾</span>
+        <h3>Запитів поки немає</h3>
+        <p>Створи запит зі спільного списку, щоб домовитися, хто саме купує продукти.</p>
+      </div>
+    `;
+  const familyRequestsSection = familyMode
+    ? `
+      <section class="section purchase-requests-section">
+        <div class="section-header">
+          <div>
+            <p class="eyebrow">${escapeHtml(familyLabel)}</p>
+            <h2 class="section-title">Запити на покупки</h2>
+          </div>
+          <button class="compact-button purchase-history-button" type="button" data-open-family-activity>
+            ${icon("history")} Дії
+            <span class="activity-pill" data-family-activity-badge ${unreadActivityCount ? "" : "hidden"}>${unreadActivityCount}</span>
+          </button>
+        </div>
+        <div class="purchase-request-toolbar">
+          <button class="compact-button primary add-item-button" type="button" data-create-purchase-request>
+            ${icon("plus")} Створити запит
+          </button>
+        </div>
+        <div class="purchase-request-list">${purchaseRequestsMarkup}</div>
+      </section>
+    `
+    : `
+      <div class="alternative-card family-readonly-card purchase-request-info">
+        <strong>Запити на покупки працюють у сімейному просторі</strong>
+        <p>Перемкнись на сімейну групу, щоб передавати покупки між учасниками й бачити історію виконання.</p>
+      </div>
+    `;
 
   return `
     <section class="screen">
@@ -468,6 +572,8 @@ export function renderShoppingView(state) {
         </button>
         <button class="compact-button" type="button" data-clear-checked>Прибрати куплене</button>
       </div>
+
+      ${familyRequestsSection}
 
       ${
         state.shopping.length

@@ -1040,6 +1040,184 @@ p {
   margin-bottom: 17px;
 }
 
+.purchase-requests-section {
+  margin-bottom: 22px;
+}
+
+.purchase-request-toolbar {
+  display: flex;
+  gap: 9px;
+  margin-bottom: 12px;
+}
+
+.purchase-history-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.activity-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  min-height: 22px;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: var(--green);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.purchase-request-list {
+  display: grid;
+  gap: 10px;
+}
+
+.purchase-request-card {
+  padding: 15px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: var(--surface);
+}
+
+.purchase-request-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.purchase-request-head strong,
+.purchase-request-head span {
+  display: block;
+}
+
+.purchase-request-head strong {
+  margin-bottom: 4px;
+  font-size: 15px;
+}
+
+.purchase-request-head span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.purchase-request-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.purchase-request-status.idle {
+  background: #edf0e7;
+  color: #556246;
+}
+
+.purchase-request-status.active {
+  background: #eef7d3;
+  color: #5d7208;
+}
+
+.purchase-request-status.warning {
+  background: #fff1de;
+  color: #9c5f14;
+}
+
+.purchase-request-status.resolved {
+  background: #dff3d8;
+  color: #2f7d32;
+}
+
+.purchase-request-status.muted {
+  background: #ececeb;
+  color: #6c6c68;
+}
+
+.purchase-request-note,
+.purchase-request-summary-note {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.purchase-request-stats,
+.purchase-request-summary-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.purchase-request-stats span,
+.purchase-request-summary-grid span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: var(--green-soft);
+  color: var(--green-dark);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.purchase-request-open {
+  width: 100%;
+  justify-content: center;
+}
+
+.purchase-request-empty,
+.purchase-request-info {
+  margin-bottom: 14px;
+}
+
+.purchase-request-picker {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.purchase-request-pick {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+}
+
+.purchase-request-pick input {
+  width: 18px;
+  height: 18px;
+  margin-top: 2px;
+}
+
+.purchase-request-pick span {
+  display: block;
+}
+
+.purchase-request-pick strong {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 14px;
+}
+
+.purchase-request-pick small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .add-item-button {
   flex: 1;
 }
@@ -1060,6 +1238,77 @@ p {
 
 .shopping-group {
   margin-bottom: 23px;
+}
+
+.purchase-request-summary-card {
+  margin-bottom: 14px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--surface);
+}
+
+.purchase-request-summary-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.purchase-request-summary-row strong {
+  font-size: 14px;
+}
+
+.purchase-request-detail-list,
+.family-activity-list {
+  display: grid;
+  gap: 10px;
+}
+
+.purchase-request-item-card,
+.family-activity-card {
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--surface);
+}
+
+.purchase-request-item-head,
+.family-activity-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.purchase-request-item-head strong,
+.family-activity-head strong {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 14px;
+}
+
+.purchase-request-item-head span,
+.family-activity-head span,
+.purchase-request-item-meta,
+.family-activity-card small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.purchase-request-item-meta {
+  margin-bottom: 8px;
+}
+
+.purchase-request-item-note,
+.purchase-request-item-reason,
+.family-activity-card p {
+  margin: 0 0 8px;
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .shopping-group-title {
