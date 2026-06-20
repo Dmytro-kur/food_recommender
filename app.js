@@ -1,6 +1,14 @@
 import { deleteState, readState, writeState } from "./db.js";
 import { neonClient, neonConfigured } from "./neon.js";
 import { LOCAL_DB_STATE_KEY, STORAGE_KEY, availableViews, defaultState } from "./app/data.js";
+import {
+  describePurchaseItemStatus,
+  describePurchaseRequestStatus,
+  formatFamilyDateTime,
+  getPurchaseItemStatusClass,
+  getPurchaseRequestStatusClass,
+  isActivePurchaseRequestStatus,
+} from "./app/family.js";
 import { escapeHtml, parseLines, pluralize } from "./app/utils.js";
 import { categoryEmoji, formatMoney, icon } from "./app/ui.js";
 import {
@@ -741,8 +749,10 @@ async function syncSharedNotifications() {
 
   lastSeenFamilyNotificationEventId =
     Number(events[events.length - 1]?.event_id) || lastSeenFamilyNotificationEventId;
-  unreadFamilyActivityCount += events.length;
-  updateFamilyActivityBadge();
+  if (document.hidden) {
+    unreadFamilyActivityCount += events.length;
+    updateFamilyActivityBadge();
+  }
 
   const freshEvents = events.filter((event) => shouldDisplayFamilyNotification(event));
   if (!freshEvents.length) return;
@@ -1063,49 +1073,6 @@ function publishShoppingListNotification(addedCount) {
   });
 }
 
-function describePurchaseRequestStatus(status) {
-  if (status === "completed") return "Усе куплено";
-  if (status === "partially_completed") return "Частково виконано";
-  if (status === "in_progress") return "У процесі";
-  if (status === "cancelled") return "Скасовано";
-  return "Відкрито";
-}
-
-function describePurchaseItemStatus(status) {
-  if (status === "bought") return "Куплено";
-  if (status === "not_bought") return "Не куплено";
-  return "Очікує";
-}
-
-function formatDateTimeLabel(value) {
-  if (!value) return "щойно";
-
-  try {
-    return new Intl.DateTimeFormat("uk-UA", {
-      day: "2-digit",
-      month: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-    }).format(new Date(value));
-  } catch {
-    return value;
-  }
-}
-
-function getPurchaseRequestStatusClass(status) {
-  if (status === "completed") return "resolved";
-  if (status === "partially_completed") return "warning";
-  if (status === "in_progress") return "active";
-  if (status === "cancelled") return "muted";
-  return "idle";
-}
-
-function getPurchaseItemStatusClass(status) {
-  if (status === "bought") return "resolved";
-  if (status === "not_bought") return "warning";
-  return "idle";
-}
-
 function findShoppingItemForRequestItem(requestItem, { includeChecked = false } = {}) {
   const directItemId = Number(requestItem?.shopping_item_id);
   if (Number.isInteger(directItemId)) {
@@ -1129,23 +1096,57 @@ function findShoppingItemForRequestItem(requestItem, { includeChecked = false } 
   );
 }
 
+function ensurePantryContainsShoppingItem(item) {
+  if (state.pantry.some((pantryItem) => sameProduct(pantryItem, item))) return false;
+
+  state.pantry.push({
+    id: Date.now(),
+    name: item.name,
+    amount: item.amount,
+    emoji: categoryEmoji(item.category),
+    low: false,
+    productId: item.productId ?? null,
+  });
+
+  return true;
+}
+
+function updateLocalShoppingItemState(item, checked) {
+  item.checked = checked;
+  if (checked) {
+    ensurePantryContainsShoppingItem(item);
+  }
+  syncIngredientAvailability();
+}
+
+function matchesPurchaseRequestItem(shoppingItem, requestItem) {
+  const shoppingItemId = Number(shoppingItem?.id);
+  const requestShoppingItemId = Number(requestItem?.shopping_item_id);
+
+  if (
+    Number.isInteger(shoppingItemId) &&
+    Number.isInteger(requestShoppingItemId) &&
+    shoppingItemId === requestShoppingItemId
+  ) {
+    return true;
+  }
+
+  const requestTarget = {
+    name: requestItem?.item_name,
+    productId: requestItem?.product_id ?? null,
+  };
+
+  return (
+    sameProduct(shoppingItem, requestTarget) ||
+    shoppingItem.name.trim().toLowerCase() === String(requestItem?.item_name || "").trim().toLowerCase()
+  );
+}
+
 function applyBoughtRequestItemToShoppingState(requestItem, { showLocalToast = false } = {}) {
   const shoppingItem = findShoppingItemForRequestItem(requestItem);
   if (!shoppingItem || shoppingItem.checked) return false;
 
-  shoppingItem.checked = true;
-  if (!state.pantry.some((pantryItem) => sameProduct(pantryItem, shoppingItem))) {
-    state.pantry.push({
-      id: Date.now(),
-      name: shoppingItem.name,
-      amount: shoppingItem.amount,
-      emoji: categoryEmoji(shoppingItem.category),
-      low: false,
-      productId: shoppingItem.productId ?? null,
-    });
-  }
-
-  syncIngredientAvailability();
+  updateLocalShoppingItemState(shoppingItem, true);
   render();
 
   if (showLocalToast) {
@@ -1178,8 +1179,8 @@ function renderPurchaseRequestDetailItems(items = []) {
         ? `<p class="purchase-request-item-reason">Причина: ${escapeHtml(item.not_bought_reason)}</p>`
         : "";
       const resolverMarkup = item.resolver_display_name
-        ? `<span>${escapeHtml(item.resolver_display_name)} · ${formatDateTimeLabel(item.resolved_at || item.updated_at)}</span>`
-        : `<span>${formatDateTimeLabel(item.updated_at)}</span>`;
+        ? `<span>${escapeHtml(item.resolver_display_name)} · ${formatFamilyDateTime(item.resolved_at || item.updated_at)}</span>`
+        : `<span>${formatFamilyDateTime(item.updated_at)}</span>`;
       const buttonLabel = item.item_status === "bought" ? "Коментар" : item.item_status === "not_bought" ? "Оновити" : "Статус";
 
       return `
@@ -1367,7 +1368,7 @@ async function openFamilyActivityModal() {
                     <article class="family-activity-card">
                       <div class="family-activity-head">
                         <strong>${escapeHtml(activity.title)}</strong>
-                        <span>${formatDateTimeLabel(activity.created_at)}</span>
+                        <span>${formatFamilyDateTime(activity.created_at)}</span>
                       </div>
                       <p>${escapeHtml(activity.body)}</p>
                       <small>${escapeHtml(activity.actor_display_name || "Хтось")}</small>
@@ -1399,6 +1400,15 @@ async function openFamilyActivityModal() {
   }
 }
 
+async function loadPurchaseRequestDetails(requestId) {
+  const result = await neonClient.rpc("get_family_purchase_request_details", {
+    target_request_id: requestId,
+  });
+
+  if (result.error) throw result.error;
+  return result.data || {};
+}
+
 async function openPurchaseRequestDetails(requestId) {
   openModal(`
     <div class="sheet-handle"></div>
@@ -1413,25 +1423,7 @@ async function openPurchaseRequestDetails(requestId) {
   `);
 
   try {
-    const result = await neonClient.rpc("get_family_purchase_request_details", {
-      target_request_id: requestId,
-    });
-
-    if (result.error) {
-      openModal(`
-        <div class="sheet-handle"></div>
-        <div class="sheet-header">
-          <div>
-            <h2 id="modalTitle">Не вдалося завантажити</h2>
-            <p>${escapeHtml(getFamilyPurchaseRequestsErrorMessage(result.error, "Помилка Neon Data API"))}</p>
-          </div>
-          <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
-        </div>
-      `);
-      return;
-    }
-
-    const request = result.data || {};
+    const request = await loadPurchaseRequestDetails(requestId);
     const items = Array.isArray(request.items) ? request.items : [];
 
     openModal(`
@@ -1439,7 +1431,7 @@ async function openPurchaseRequestDetails(requestId) {
       <div class="sheet-header">
         <div>
           <h2 id="modalTitle">${escapeHtml(request.request_title || "Запит")}</h2>
-          <p>${escapeHtml(request.creator_display_name || "Хтось")} · ${formatDateTimeLabel(request.updated_at || request.created_at)}</p>
+          <p>${escapeHtml(request.creator_display_name || "Хтось")} · ${formatFamilyDateTime(request.updated_at || request.created_at)}</p>
         </div>
         <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
       </div>
@@ -1585,26 +1577,91 @@ async function openPurchaseRequestItemStatusModal(requestId, requestTitle, item)
   });
 }
 
-function toggleShoppingItem(id, checked) {
+async function findPendingPurchaseRequestItemsForShoppingItem(shoppingItem) {
+  if (!neonClient || !currentUser || accessProfile?.status !== "active" || isPersonalScope()) {
+    return [];
+  }
+
+  if (!familyPurchaseRequests.length) {
+    await refreshFamilyPurchaseRequests();
+  }
+
+  const candidateRequests = familyPurchaseRequests.filter(
+    (request) => isActivePurchaseRequestStatus(request.status) && Number(request.pending_items) > 0,
+  );
+
+  if (!candidateRequests.length) return [];
+
+  const detailSets = await Promise.all(
+    candidateRequests.map(async (request) => {
+      try {
+        const details = await loadPurchaseRequestDetails(request.request_id);
+        const items = Array.isArray(details.items) ? details.items : [];
+        return items
+          .filter(
+            (item) =>
+              item.item_status === "pending" && matchesPurchaseRequestItem(shoppingItem, item),
+          )
+          .map((item) => ({ item }));
+      } catch (error) {
+        if (isFamilyPurchaseRequestsUnavailable(error)) return [];
+        throw error;
+      }
+    }),
+  );
+
+  return detailSets.flat();
+}
+
+async function syncPurchaseRequestsFromShoppingItem(shoppingItem) {
+  if (!shoppingItem?.checked) return 0;
+
+  try {
+    const matchingItems = await findPendingPurchaseRequestItemsForShoppingItem(shoppingItem);
+    if (!matchingItems.length) return 0;
+
+    const results = await Promise.all(
+      matchingItems.map(({ item }) =>
+        neonClient.rpc("update_family_purchase_request_item", {
+          target_request_item_id: item.request_item_id,
+          item_status: "bought",
+          resolution_note: "Позначено купленим зі списку покупок",
+          not_bought_reason: "",
+        }),
+      ),
+    );
+
+    const updatedCount = results.reduce((count, result) => {
+      if (result.error) {
+        return count;
+      }
+      return count + 1;
+    }, 0);
+
+    if (updatedCount > 0) {
+      await refreshFamilyPurchaseRequests({ renderIfChanged: true });
+    }
+
+    return updatedCount;
+  } catch {
+    return 0;
+  }
+}
+
+async function toggleShoppingItem(id, checked) {
   const item = state.shopping.find((entry) => entry.id === id);
   if (!item) return;
+  if (item.checked === checked) return;
 
-  item.checked = checked;
-  if (checked && !state.pantry.some((pantryItem) => sameProduct(pantryItem, item))) {
-    state.pantry.push({
-      id: Date.now(),
-      name: item.name,
-      amount: item.amount,
-      emoji: categoryEmoji(item.category),
-      low: false,
-      productId: item.productId,
-    });
-  }
-  syncIngredientAvailability();
+  updateLocalShoppingItemState(item, checked);
   render();
   showToast(checked ? `${item.name} — куплено` : `${item.name} повернуто у список`);
+
   if (checked) {
-    publishShoppingProgressNotification(`«${item.name}» позначено як куплене`);
+    const syncedRequestItems = await syncPurchaseRequestsFromShoppingItem(item);
+    if (syncedRequestItems === 0) {
+      publishShoppingProgressNotification(`«${item.name}» позначено як куплене`);
+    }
   }
 }
 

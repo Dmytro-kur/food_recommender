@@ -1,4 +1,9 @@
 import { getSortedSuggestions, shoppingTotal, checkedTotal } from "./state.js";
+import {
+  describePurchaseRequestStatus,
+  formatFamilyDateTime,
+  getPurchaseRequestStatusClass,
+} from "./family.js";
 import { escapeHtml, pluralize } from "./utils.js";
 import { formatMoney, getWeekRangeLabel, icon } from "./ui.js";
 
@@ -401,37 +406,6 @@ export function renderMenuView(state, currentUser, syncLabel = currentUser ? "С
   `;
 }
 
-function describePurchaseRequestStatus(status) {
-  if (status === "completed") return "Усе куплено";
-  if (status === "partially_completed") return "Частково";
-  if (status === "in_progress") return "У процесі";
-  if (status === "cancelled") return "Скасовано";
-  return "Відкрито";
-}
-
-function getPurchaseRequestStatusClass(status) {
-  if (status === "completed") return "resolved";
-  if (status === "partially_completed") return "warning";
-  if (status === "in_progress") return "active";
-  if (status === "cancelled") return "muted";
-  return "idle";
-}
-
-function formatDateTimeLabel(value) {
-  if (!value) return "щойно";
-
-  try {
-    return new Intl.DateTimeFormat("uk-UA", {
-      day: "2-digit",
-      month: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-    }).format(new Date(value));
-  } catch {
-    return value;
-  }
-}
-
 function renderPurchaseRequestCard(request) {
   const noteMarkup = request.request_note
     ? `<p class="purchase-request-note">${escapeHtml(request.request_note)}</p>`
@@ -442,7 +416,7 @@ function renderPurchaseRequestCard(request) {
       <div class="purchase-request-head">
         <div>
           <strong>${escapeHtml(request.request_title)}</strong>
-          <span>${escapeHtml(request.creator_display_name || "Хтось")} · ${formatDateTimeLabel(request.updated_at)}</span>
+          <span>${escapeHtml(request.creator_display_name || "Хтось")} · ${formatFamilyDateTime(request.updated_at)}</span>
         </div>
         <span class="purchase-request-status ${getPurchaseRequestStatusClass(request.status)}">${describePurchaseRequestStatus(request.status)}</span>
       </div>
@@ -480,11 +454,19 @@ export function renderShoppingView(state, context = {}) {
   const percent = state.shopping.length ? Math.round((completed / state.shopping.length) * 100) : 0;
   const groupsMarkup = Object.entries(grouped)
     .map(
-      ([category, items]) => `
+      ([category, items]) => {
+        const sortedItems = [...items].sort(
+          (left, right) =>
+            Number(left.checked) - Number(right.checked) ||
+            Number(right.urgent) - Number(left.urgent) ||
+            left.name.localeCompare(right.name, "uk"),
+        );
+
+        return `
         <section class="shopping-group">
           <h2 class="shopping-group-title">${category}<span>${formatMoney(items.reduce((sum, item) => sum + item.price, 0))}</span></h2>
           <div class="shopping-list">
-            ${items
+            ${sortedItems
               .map(
                 (item) => `
                   <label class="shopping-item ${item.checked ? "checked" : ""}">
@@ -503,7 +485,8 @@ export function renderShoppingView(state, context = {}) {
               .join("")}
           </div>
         </section>
-      `,
+      `;
+      },
     )
     .join("");
   const purchaseRequestsMarkup = purchaseRequests.length
