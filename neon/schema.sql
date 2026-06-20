@@ -57,6 +57,28 @@ CREATE TABLE IF NOT EXISTS public.family_group_memberships (
   PRIMARY KEY (family_id, user_id)
 );
 
+CREATE TABLE IF NOT EXISTS public.family_notification_events (
+  event_id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  family_id bigint NOT NULL
+    REFERENCES public.family_groups(family_id)
+    ON DELETE CASCADE,
+  actor_user_id text NOT NULL
+    REFERENCES public.app_users(user_id)
+    ON DELETE CASCADE,
+  event_type text NOT NULL CHECK (event_type IN ('menu_updated', 'shopping_list_updated', 'shopping_progress')),
+  title text NOT NULL,
+  body text NOT NULL,
+  url text NOT NULL DEFAULT '#home',
+  dedupe_key text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS family_notification_events_family_id_event_id_idx
+  ON public.family_notification_events (family_id, event_id DESC);
+
+CREATE INDEX IF NOT EXISTS family_notification_events_dedupe_idx
+  ON public.family_notification_events (family_id, dedupe_key, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS public.user_preferences (
   user_id text PRIMARY KEY
     REFERENCES public.app_users(user_id)
@@ -696,6 +718,190 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION public.push_family_notification_event(
+  target_family_id bigint,
+  event_type text,
+  title text,
+  body text,
+  url text DEFAULT '#home',
+  dedupe_key text DEFAULT NULL,
+  cooldown_seconds integer DEFAULT 120
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_event_type text := NULLIF(BTRIM(event_type), '');
+  v_title text := NULLIF(BTRIM(title), '');
+  v_body text := NULLIF(BTRIM(body), '');
+  v_url text := COALESCE(NULLIF(BTRIM(url), ''), '#home');
+  v_dedupe_key text := COALESCE(NULLIF(BTRIM(dedupe_key), ''), NULLIF(BTRIM(event_type), ''));
+  v_cooldown_seconds integer := GREATEST(COALESCE(cooldown_seconds, 120), 0);
+  v_member_count bigint;
+  v_existing_event_id bigint;
+  v_existing_created_at timestamptz;
+  v_event_id bigint;
+  v_created_at timestamptz;
+BEGIN
+  IF auth.user_id() IS NULL THEN
+    RAISE EXCEPTION 'Authentication required';
+  END IF;
+
+  IF NOT public.has_app_access() THEN
+    RAISE EXCEPTION 'App access denied for the current user';
+  END IF;
+
+  IF target_family_id IS NULL THEN
+    RAISE EXCEPTION 'Family group is required';
+  END IF;
+
+  IF NOT public.is_family_group_member(target_family_id) THEN
+    RAISE EXCEPTION 'Family access denied for the current user';
+  END IF;
+
+  IF v_event_type IS NULL OR v_title IS NULL OR v_body IS NULL OR v_dedupe_key IS NULL THEN
+    RAISE EXCEPTION 'Notification event payload is incomplete';
+  END IF;
+
+  SELECT COUNT(*)::bigint
+  INTO v_member_count
+  FROM public.family_group_memberships
+  WHERE family_id = target_family_id;
+
+  IF v_member_count <= 1 THEN
+    RETURN jsonb_build_object(
+      'queued', false,
+      'suppressed', true,
+      'reason', 'no_other_members'
+    );
+  END IF;
+
+  IF v_cooldown_seconds > 0 THEN
+    SELECT event.event_id, event.created_at
+    INTO v_existing_event_id, v_existing_created_at
+    FROM public.family_notification_events AS event
+    WHERE event.family_id = target_family_id
+      AND event.dedupe_key = v_dedupe_key
+      AND event.created_at >= now() - make_interval(secs => v_cooldown_seconds)
+    ORDER BY event.created_at DESC, event.event_id DESC
+    LIMIT 1;
+  END IF;
+
+  IF v_existing_event_id IS NOT NULL THEN
+    RETURN jsonb_build_object(
+      'queued', false,
+      'suppressed', true,
+      'reason', 'cooldown',
+      'event_id', v_existing_event_id,
+      'created_at', v_existing_created_at
+    );
+  END IF;
+
+  INSERT INTO public.family_notification_events (
+    family_id,
+    actor_user_id,
+    event_type,
+    title,
+    body,
+    url,
+    dedupe_key
+  )
+  VALUES (
+    target_family_id,
+    auth.user_id(),
+    v_event_type,
+    v_title,
+    v_body,
+    v_url,
+    v_dedupe_key
+  )
+  RETURNING event_id, created_at
+  INTO v_event_id, v_created_at;
+
+  RETURN jsonb_build_object(
+    'queued', true,
+    'suppressed', false,
+    'event_id', v_event_id,
+    'created_at', v_created_at
+  );
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.get_latest_family_notification_event_id()
+RETURNS bigint
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+  SELECT
+    CASE
+      WHEN auth.user_id() IS NULL OR NOT public.has_app_access() THEN 0
+      ELSE COALESCE((
+        SELECT MAX(event.event_id)
+        FROM public.family_notification_events AS event
+        WHERE public.is_family_group_member(event.family_id)
+      ), 0)
+    END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.list_family_notification_events(
+  after_event_id bigint DEFAULT 0,
+  limit_count integer DEFAULT 20
+)
+RETURNS TABLE (
+  event_id bigint,
+  family_id bigint,
+  family_name text,
+  actor_user_id text,
+  actor_display_name text,
+  event_type text,
+  title text,
+  body text,
+  url text,
+  dedupe_key text,
+  created_at timestamptz
+)
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+BEGIN
+  IF auth.user_id() IS NULL THEN
+    RAISE EXCEPTION 'Authentication required';
+  END IF;
+
+  IF NOT public.has_app_access() THEN
+    RAISE EXCEPTION 'App access denied for the current user';
+  END IF;
+
+  RETURN QUERY
+  SELECT
+    event.event_id,
+    event.family_id,
+    grp.family_name,
+    event.actor_user_id,
+    COALESCE(actor.name, actor.email),
+    event.event_type,
+    event.title,
+    event.body,
+    event.url,
+    event.dedupe_key,
+    event.created_at
+  FROM public.family_notification_events AS event
+  JOIN public.family_groups AS grp ON grp.family_id = event.family_id
+  LEFT JOIN neon_auth.user AS actor ON actor.id::text = event.actor_user_id
+  WHERE event.event_id > GREATEST(COALESCE(after_event_id, 0), 0)
+    AND event.actor_user_id <> auth.user_id()
+    AND public.is_family_group_member(event.family_id)
+  ORDER BY event.event_id
+  LIMIT GREATEST(LEAST(COALESCE(limit_count, 20), 50), 1);
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION public.normalize_entity_name(value text)
 RETURNS text
 LANGUAGE sql
@@ -1313,6 +1519,9 @@ REVOKE ALL ON FUNCTION public.set_active_family_group(bigint) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.list_family_group_members(bigint) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.add_family_group_member(bigint, text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.remove_family_group_member(bigint, text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.push_family_notification_event(bigint, text, text, text, text, text, integer) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.get_latest_family_notification_event_id() FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.list_family_notification_events(bigint, integer) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.normalize_entity_name(text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.save_app_state(jsonb) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.save_scoped_app_state(jsonb, bigint) FROM PUBLIC;
@@ -1333,6 +1542,9 @@ GRANT EXECUTE ON FUNCTION public.set_active_family_group(bigint) TO authenticate
 GRANT EXECUTE ON FUNCTION public.list_family_group_members(bigint) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.add_family_group_member(bigint, text) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.remove_family_group_member(bigint, text) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.push_family_notification_event(bigint, text, text, text, text, text, integer) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.get_latest_family_notification_event_id() TO authenticated;
+GRANT EXECUTE ON FUNCTION public.list_family_notification_events(bigint, integer) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.save_app_state(jsonb) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.save_scoped_app_state(jsonb, bigint) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.save_scoped_app_state_if_fresh(jsonb, timestamptz, bigint) TO authenticated;
@@ -1343,6 +1555,7 @@ GRANT EXECUTE ON FUNCTION public.migrate_legacy_user_state() TO authenticated;
 ALTER TABLE public.app_users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.family_groups ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.family_group_memberships ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.family_notification_events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.user_preferences ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.user_state ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.user_state_meta ENABLE ROW LEVEL SECURITY;
@@ -1408,6 +1621,26 @@ FOR SELECT
 TO authenticated
 USING (
   public.is_family_group_member(public.family_group_memberships.family_id)
+);
+
+DROP POLICY IF EXISTS family_notification_events_select_member ON public.family_notification_events;
+CREATE POLICY family_notification_events_select_member
+ON public.family_notification_events
+FOR SELECT
+TO authenticated
+USING (
+  public.is_family_group_member(public.family_notification_events.family_id)
+);
+
+DROP POLICY IF EXISTS family_notification_events_insert_member ON public.family_notification_events;
+CREATE POLICY family_notification_events_insert_member
+ON public.family_notification_events
+FOR INSERT
+TO authenticated
+WITH CHECK (
+  actor_user_id = auth.user_id()
+  AND public.has_app_access()
+  AND public.is_family_group_member(public.family_notification_events.family_id)
 );
 
 DROP POLICY IF EXISTS user_preferences_select_self ON public.user_preferences;

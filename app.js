@@ -47,6 +47,8 @@ let skipNextCloudSave = false;
 let cloudSyncInterval = null;
 let cloudSyncInFlight = false;
 let cloudSyncQueued = false;
+let lastSeenFamilyNotificationEventId = 0;
+let displayedFamilyNotificationKeys = new Map();
 let authFormMode = "sign-in";
 let isBootstrapping = false;
 
@@ -56,6 +58,8 @@ const modalSheet = document.querySelector("#modalSheet");
 const toast = document.querySelector("#toast");
 const shoppingBadge = document.querySelector("#shoppingBadge");
 const CLOUD_SYNC_INTERVAL_MS = 4000;
+const FAMILY_NOTIFICATION_POLL_LIMIT = 20;
+const FAMILY_NOTIFICATION_DISPLAY_COOLDOWN_MS = 90_000;
 
 function findCatalogProduct(target) {
   return findCatalogProductInCatalog(target, state.productCatalog);
@@ -129,6 +133,15 @@ function isFamilyGroupsUnavailable(error) {
   );
 }
 
+function isFamilyNotificationsUnavailable(error) {
+  const message = String(error?.message || "");
+  return (
+    message.includes("push_family_notification_event") ||
+    message.includes("list_family_notification_events") ||
+    message.includes("get_latest_family_notification_event_id")
+  );
+}
+
 function getActiveFamilyId() {
   const numeric = Number(activeFamilyGroup?.family_id);
   return Number.isInteger(numeric) ? numeric : null;
@@ -150,6 +163,10 @@ function getScopedLocalStateKey(userId = currentUser?.id, targetFamilyId = getAc
 
 function getCurrentScopeLabel() {
   return activeFamilyGroup?.family_name || "Особистий простір";
+}
+
+function getCurrentUserLabel() {
+  return currentUser?.name?.trim() || currentUser?.email?.trim() || "Хтось";
 }
 
 function getFamilyGroupsErrorMessage(error, fallback) {
@@ -174,6 +191,11 @@ function rememberCloudSnapshot(snapshot, updatedAt = null) {
 function clearCloudSnapshot() {
   rememberCloudSnapshot(null, null);
   hasPendingCloudChanges = false;
+}
+
+function resetFamilyNotificationState() {
+  lastSeenFamilyNotificationEventId = 0;
+  displayedFamilyNotificationKeys = new Map();
 }
 
 function getCurrentStateSnapshot(source = state) {
@@ -399,6 +421,25 @@ async function refreshFamilyContext() {
   setFamilyContext(result.data || []);
 }
 
+async function primeFamilyNotificationCursor() {
+  if (!neonClient || !currentUser || accessProfile?.status !== "active") {
+    resetFamilyNotificationState();
+    return;
+  }
+
+  const result = await neonClient.rpc("get_latest_family_notification_event_id");
+  if (result.error) {
+    if (isFamilyNotificationsUnavailable(result.error)) {
+      resetFamilyNotificationState();
+      return;
+    }
+    throw result.error;
+  }
+
+  lastSeenFamilyNotificationEventId = Number(result.data) || 0;
+  displayedFamilyNotificationKeys.clear();
+}
+
 async function loadCloudState(userId, targetFamilyId = getActiveFamilyId()) {
   let normalizedResult;
 
@@ -543,7 +584,9 @@ async function syncCurrentScopeFromCloud(reason = "poll") {
         scheduleCloud: false,
         markDirty: false,
       });
-      showToast("Оновлено зміни з сімейного простору");
+      if (isPersonalScope(targetFamilyId)) {
+        showToast("Оновлено дані з хмари");
+      }
     }
     return;
   }
@@ -563,6 +606,111 @@ async function syncCurrentScopeFromCloud(reason = "poll") {
   }
 }
 
+function shouldDisplayFamilyNotification(event) {
+  const dedupeKey = event?.dedupe_key || event?.event_type || event?.event_id;
+  const cacheKey = `${event?.family_id || "family"}:${dedupeKey}`;
+  const now = Date.now();
+  const lastShownAt = displayedFamilyNotificationKeys.get(cacheKey);
+
+  if (lastShownAt && now - lastShownAt < FAMILY_NOTIFICATION_DISPLAY_COOLDOWN_MS) {
+    return false;
+  }
+
+  displayedFamilyNotificationKeys.set(cacheKey, now);
+  for (const [key, value] of displayedFamilyNotificationKeys) {
+    if (now - value >= FAMILY_NOTIFICATION_DISPLAY_COOLDOWN_MS) {
+      displayedFamilyNotificationKeys.delete(key);
+    }
+  }
+
+  return true;
+}
+
+function buildFamilyNotificationSummary(events) {
+  const freshEvents = events.filter(Boolean);
+  const latest = freshEvents[freshEvents.length - 1];
+  const familyNames = [...new Set(freshEvents.map((event) => event.family_name).filter(Boolean))];
+
+  if (freshEvents.length === 1) {
+    return {
+      title: latest.title,
+      body: `${latest.family_name ? `${latest.family_name}: ` : ""}${latest.body}`,
+      tag: `family-event-${latest.event_id}`,
+      url: latest.url || "#home",
+    };
+  }
+
+  return {
+    title: familyNames.length === 1 ? `${familyNames[0]}: нові зміни` : "Нові сімейні зміни",
+    body: `Є ${freshEvents.length} нових оновлень у спільному просторі`,
+    tag: `family-event-summary-${latest.event_id}`,
+    url: latest.url || "#home",
+  };
+}
+
+async function syncSharedNotifications() {
+  if (!neonClient || !currentUser || accessProfile?.status !== "active") return;
+
+  const result = await neonClient.rpc("list_family_notification_events", {
+    after_event_id: lastSeenFamilyNotificationEventId,
+    limit_count: FAMILY_NOTIFICATION_POLL_LIMIT,
+  });
+
+  if (result.error) {
+    if (isFamilyNotificationsUnavailable(result.error)) return;
+    throw result.error;
+  }
+
+  const events = Array.isArray(result.data) ? result.data : [];
+  if (!events.length) return;
+
+  lastSeenFamilyNotificationEventId =
+    Number(events[events.length - 1]?.event_id) || lastSeenFamilyNotificationEventId;
+
+  const freshEvents = events.filter((event) => shouldDisplayFamilyNotification(event));
+  if (!freshEvents.length) return;
+
+  const summary = buildFamilyNotificationSummary(freshEvents);
+  if (document.hidden) {
+    await notifyAction(summary);
+    return;
+  }
+
+  showToast(summary.body);
+}
+
+async function publishFamilyNotification({
+  eventType,
+  title,
+  body,
+  url = "#home",
+  dedupeKey = eventType,
+  cooldownSeconds = 120,
+}) {
+  if (!neonClient || !currentUser || accessProfile?.status !== "active") return;
+
+  const targetFamilyId = getActiveFamilyId();
+  if (targetFamilyId === null) return;
+
+  try {
+    const result = await neonClient.rpc("push_family_notification_event", {
+      target_family_id: targetFamilyId,
+      event_type: eventType,
+      title,
+      body,
+      url,
+      dedupe_key: dedupeKey,
+      cooldown_seconds: cooldownSeconds,
+    });
+
+    if (result.error && !isFamilyNotificationsUnavailable(result.error)) {
+      throw result.error;
+    }
+  } catch {
+    // Shared notifications are best-effort and should not block local changes.
+  }
+}
+
 function requestCloudSync(reason = "manual") {
   if (!neonClient || !currentUser || accessProfile?.status !== "active") return;
 
@@ -572,10 +720,19 @@ function requestCloudSync(reason = "manual") {
   }
 
   cloudSyncInFlight = true;
-  syncCurrentScopeFromCloud(reason)
-    .catch(() => {
+  (async () => {
+    try {
+      await syncCurrentScopeFromCloud(reason);
+    } catch {
       updateSyncIndicator("offline");
-    })
+    }
+
+    try {
+      await syncSharedNotifications();
+    } catch {
+      // Notification polling should not surface as a sync error.
+    }
+  })()
     .finally(() => {
       cloudSyncInFlight = false;
       if (cloudSyncQueued) {
@@ -665,6 +822,7 @@ async function signOut() {
   setFamilyContext();
   clearCloudSnapshot();
   cloudStateExists = false;
+  resetFamilyNotificationState();
   authFormMode = "sign-in";
   renderAuthScreen();
 }
@@ -774,6 +932,39 @@ function switchView(view) {
   setTimeout(() => app.focus({ preventScroll: true }), 0);
 }
 
+function publishMenuNotification(message) {
+  return publishFamilyNotification({
+    eventType: "menu_updated",
+    title: "Меню оновлено 🍽️",
+    body: `${getCurrentUserLabel()}: ${message}`,
+    url: "#menu",
+    dedupeKey: "menu-updated",
+    cooldownSeconds: 120,
+  });
+}
+
+function publishShoppingProgressNotification(message) {
+  return publishFamilyNotification({
+    eventType: "shopping_progress",
+    title: "Покупки оновлено 🛒",
+    body: `${getCurrentUserLabel()}: ${message}`,
+    url: "#shopping",
+    dedupeKey: "shopping-progress",
+    cooldownSeconds: 180,
+  });
+}
+
+function publishShoppingListNotification(addedCount) {
+  return publishFamilyNotification({
+    eventType: "shopping_list_updated",
+    title: "Список покупок оновлено 🛒",
+    body: `${getCurrentUserLabel()}: додано ${addedCount} ${pluralize(addedCount, "позицію", "позиції", "позицій")} до списку`,
+    url: "#shopping",
+    dedupeKey: "shopping-list-updated",
+    cooldownSeconds: 240,
+  });
+}
+
 function toggleShoppingItem(id, checked) {
   const item = state.shopping.find((entry) => entry.id === id);
   if (!item) return;
@@ -793,12 +984,7 @@ function toggleShoppingItem(id, checked) {
   render();
   showToast(checked ? `${item.name} — куплено` : `${item.name} повернуто у список`);
   if (checked) {
-    notifyAction({
-      title: "Покупку відмічено 🛒",
-      body: `${item.name} додано в запаси`,
-      tag: `shopping-bought-${item.id}`,
-      url: "#pantry",
-    });
+    publishShoppingProgressNotification(`«${item.name}» позначено як куплене`);
   }
 }
 
@@ -851,12 +1037,7 @@ function openUseRecipeModal(recipeId) {
     closeModal();
     render();
     showToast(`У меню: ${recipe.title}`);
-    notifyAction({
-      title: "План оновлено 🍽️",
-      body: `${recipe.title} поставлено у вибраний день`,
-      tag: `meal-planned-${recipe.id}`,
-      url: "#menu",
-    });
+    publishMenuNotification(`«${recipe.title}» тепер у меню`);
   });
 
   modalSheet.querySelector("[data-append-recipe]").addEventListener("click", () => {
@@ -872,12 +1053,7 @@ function openUseRecipeModal(recipeId) {
     closeModal();
     render();
     showToast(`${recipe.title} додано в план`);
-    notifyAction({
-      title: "Страву додано в план 🍽️",
-      body: `${recipe.title} тепер у меню`,
-      tag: `meal-appended-${recipe.id}`,
-      url: "#menu",
-    });
+    publishMenuNotification(`додано в меню «${recipe.title}»`);
   });
 }
 
@@ -1190,12 +1366,7 @@ function swapMeal(mealId) {
   });
   render();
   showToast(`Заміна: ${replacement.title}`);
-  notifyAction({
-    title: "План оновлено 🍽️",
-    body: `У меню тепер ${replacement.title}`,
-    tag: `meal-swapped-${state.meals[index].id}`,
-    url: "#menu",
-  });
+  publishMenuNotification(`у меню тепер «${replacement.title}»`);
 }
 
 function openRecipeForm(mealId = null) {
@@ -1290,12 +1461,9 @@ function openRecipeForm(mealId = null) {
     state.activeView = "menu";
     render();
     showToast(editing ? "Рецепт оновлено" : "Рецепт додано до меню");
-    notifyAction({
-      title: editing ? "Рецепт оновлено 🍽️" : "Страву заплановано 🍽️",
-      body: editing ? `${recipe.title} збережено в меню` : `${recipe.title} додано до плану`,
-      tag: `recipe-${editing ? "updated" : "created"}-${recipe.id}`,
-      url: "#menu",
-    });
+    publishMenuNotification(
+      editing ? `оновлено рецепт «${recipe.title}»` : `додано в меню «${recipe.title}»`,
+    );
   });
 }
 
@@ -1329,6 +1497,7 @@ function openDeleteRecipeModal(mealId) {
     closeModal();
     render();
     showToast(`${meal.title} видалено`);
+    publishMenuNotification(`прибрано з меню «${meal.title}»`);
   });
 }
 
@@ -2155,24 +2324,19 @@ function generateShoppingList() {
   render();
   showToast(added ? `Список оновлено: +${added}` : "Список уже відповідає меню");
   if (added) {
-    notifyAction({
-      title: "Список покупок оновлено 🛒",
-      body: `Додано ${added} ${pluralize(added, "продукт", "продукти", "продуктів")}`,
-      tag: "shopping-list-generated",
-      url: "#shopping",
-    });
+    publishShoppingListNotification(added);
   }
 }
 
-async function notifyAction({ title, body, tag, url = "#home" }) {
-  if (!("Notification" in window)) return;
+async function notifyAction({ title, body, tag, url = "#home", requestPermission = false }) {
+  if (!("Notification" in window)) return false;
 
   try {
     let permission = Notification.permission;
-    if (permission === "default") {
+    if (permission === "default" && requestPermission) {
       permission = await Notification.requestPermission();
     }
-    if (permission !== "granted") return;
+    if (permission !== "granted") return false;
 
     const options = {
       body,
@@ -2185,7 +2349,7 @@ async function notifyAction({ title, body, tag, url = "#home" }) {
     if ("serviceWorker" in navigator) {
       const registration = await navigator.serviceWorker.ready;
       registration.showNotification(title, options);
-      return;
+      return true;
     }
 
     const notification = new Notification(title, options);
@@ -2194,8 +2358,10 @@ async function notifyAction({ title, body, tag, url = "#home" }) {
       window.location.assign(options.data.url);
       notification.close();
     };
+    return true;
   } catch {
     // Toasts already confirm the action, so notification failures should not block the flow.
+    return false;
   }
 }
 
@@ -2221,37 +2387,20 @@ async function requestShoppingNotification() {
   }
 
   try {
-    const permission = await Notification.requestPermission();
-    if (permission !== "granted") {
-      showToast("Дозвіл на сповіщення не надано");
+    const message = `${count} ${pluralize(count, "продукт", "продукти", "продуктів")} · приблизно ${formatMoney(remainingItems().reduce((sum, item) => sum + item.price, 0))}`;
+    const shown = await notifyAction({
+      title: "Не забудь список покупок 🛒",
+      body: message,
+      tag: "shopping-reminder",
+      url: "#shopping",
+      requestPermission: true,
+    });
+
+    if (!shown) {
+      showToast(Notification.permission === "granted" ? "Не вдалося показати сповіщення" : "Дозвіл на сповіщення не надано");
       return;
     }
 
-    const message = `${count} ${pluralize(count, "продукт", "продукти", "продуктів")} · приблизно ${formatMoney(remainingItems().reduce((sum, item) => sum + item.price, 0))}`;
-    if ("serviceWorker" in navigator) {
-      const registration = await navigator.serviceWorker.ready;
-      registration.showNotification("Не забудь список покупок 🛒", {
-        body: message,
-        icon: "icon.svg",
-        badge: "icon.svg",
-        tag: "shopping-reminder",
-        data: { url: resolveNotificationUrl("#shopping") },
-      });
-    } else {
-      const reminderUrl = resolveNotificationUrl("#shopping");
-      const notification = new Notification("Не забудь список покупок 🛒", {
-        body: message,
-        icon: "icon.svg",
-        badge: "icon.svg",
-        tag: "shopping-reminder",
-        data: { url: reminderUrl },
-      });
-      notification.onclick = () => {
-        window.focus();
-        window.location.assign(reminderUrl);
-        notification.close();
-      };
-    }
     document.querySelector("#notificationDot").hidden = true;
     showToast("Нагадування надіслано");
   } catch {
@@ -2281,6 +2430,7 @@ async function bootstrap() {
     if (!neonConfigured) {
       stopCloudSyncLoop();
       clearCloudSnapshot();
+      resetFamilyNotificationState();
       if (!localMode) {
         renderConfigurationScreen();
         return;
@@ -2306,6 +2456,7 @@ async function bootstrap() {
     if (!user) {
       stopCloudSyncLoop();
       clearCloudSnapshot();
+      resetFamilyNotificationState();
       currentUser = null;
       accessProfile = null;
       setFamilyContext();
@@ -2318,6 +2469,7 @@ async function bootstrap() {
     if (!accessProfile || accessProfile.status !== "active") {
       stopCloudSyncLoop();
       clearCloudSnapshot();
+      resetFamilyNotificationState();
       setFamilyContext();
       renderAccessScreen(accessProfile || { status: "pending" });
       return;
@@ -2326,6 +2478,7 @@ async function bootstrap() {
     await ensureCloudStateMigrated();
     await refreshFamilyContext();
     await loadStateForCurrentScope();
+    await primeFamilyNotificationCursor();
     startCloudSyncLoop();
   } catch (error) {
     if (currentUser) {
