@@ -35,10 +35,10 @@ self.addEventListener("fetch", (event) => {
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
 
-  const targetUrl = new URL(event.notification.data?.url || "./", self.location.origin).href;
+  const targetUrl = new URL(event.notification.data?.url || "./", self.registration.scope).href;
   event.waitUntil(
     self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
-      const existing = clients.find((client) => "focus" in client);
+      const existing = clients.find((client) => "focus" in client && client.url.startsWith(self.registration.scope));
       if (existing) {
         if ("navigate" in existing) return existing.navigate(targetUrl).then((client) => client.focus());
         return existing.focus();

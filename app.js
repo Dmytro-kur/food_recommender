@@ -1512,7 +1512,7 @@ async function notifyAction({ title, body, tag, url = "#home" }) {
       icon: "icon.svg",
       badge: "icon.svg",
       tag,
-      data: { url },
+      data: { url: resolveNotificationUrl(url) },
     };
 
     if ("serviceWorker" in navigator) {
@@ -1521,10 +1521,24 @@ async function notifyAction({ title, body, tag, url = "#home" }) {
       return;
     }
 
-    new Notification(title, options);
+    const notification = new Notification(title, options);
+    notification.onclick = () => {
+      window.focus();
+      window.location.assign(options.data.url);
+      notification.close();
+    };
   } catch {
     // Toasts already confirm the action, so notification failures should not block the flow.
   }
+}
+
+function resolveNotificationUrl(target = "#home") {
+  const currentUrl = new URL(window.location.href);
+  if (target.startsWith("#")) {
+    currentUrl.hash = target;
+    return currentUrl.href;
+  }
+  return new URL(target, currentUrl.href).href;
 }
 
 async function requestShoppingNotification() {
@@ -1554,9 +1568,22 @@ async function requestShoppingNotification() {
         icon: "icon.svg",
         badge: "icon.svg",
         tag: "shopping-reminder",
+        data: { url: resolveNotificationUrl("#shopping") },
       });
     } else {
-      new Notification("Не забудь список покупок 🛒", { body: message });
+      const reminderUrl = resolveNotificationUrl("#shopping");
+      const notification = new Notification("Не забудь список покупок 🛒", {
+        body: message,
+        icon: "icon.svg",
+        badge: "icon.svg",
+        tag: "shopping-reminder",
+        data: { url: reminderUrl },
+      });
+      notification.onclick = () => {
+        window.focus();
+        window.location.assign(reminderUrl);
+        notification.close();
+      };
     }
     document.querySelector("#notificationDot").hidden = true;
     showToast("Нагадування надіслано");
