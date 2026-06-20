@@ -1,480 +1,27 @@
 import { deleteState, readState, writeState } from "./db.js";
 import { neonClient, neonConfigured } from "./neon.js";
-
-const STORAGE_KEY = "krykhta-state-v1";
-const LOCAL_DB_STATE_KEY = "state";
-const STARTER_DATA_VERSION = 2;
-
-const defaultState = {
-  dataVersion: STARTER_DATA_VERSION,
-  activeView: "home",
-  priority: "balance",
-  selectedDay: 0,
-  budget: 420,
-  shopping: [
-    { id: 1, name: "Куряче філе", amount: "500 г", price: 96, category: "М’ясо та риба", checked: false, urgent: true },
-    { id: 2, name: "Йогурт натуральний", amount: "200 г", price: 31, category: "Молочне", checked: false, urgent: false },
-    { id: 3, name: "Печериці", amount: "300 г", price: 42, category: "Овочі", checked: false, urgent: false },
-    { id: 4, name: "Помідори", amount: "500 г", price: 48, category: "Овочі", checked: true, urgent: false },
-    { id: 5, name: "Зелень", amount: "1 пучок", price: 22, category: "Овочі", checked: false, urgent: false },
-    { id: 6, name: "Булгур", amount: "400 г", price: 39, category: "Бакалія", checked: true, urgent: false },
-    { id: 7, name: "Хліб цільнозерновий", amount: "1 шт", price: 36, category: "Бакалія", checked: false, urgent: false },
-  ],
-  pantry: [
-    { id: 1, name: "Яйця", amount: "6 шт", emoji: "🥚", low: false },
-    { id: 2, name: "Гречка", amount: "350 г", emoji: "🌾", low: false },
-    { id: 3, name: "Цибуля", amount: "2 шт", emoji: "🧅", low: true },
-    { id: 4, name: "Морква", amount: "3 шт", emoji: "🥕", low: false },
-    { id: 5, name: "Сир", amount: "80 г", emoji: "🧀", low: true },
-    { id: 6, name: "Картопля", amount: "1,2 кг", emoji: "🥔", low: false },
-    { id: 7, name: "Квасоля", amount: "1 банка", emoji: "🫘", low: false },
-  ],
-  meals: [
-    {
-      id: 1,
-      day: "Сьогодні",
-      shortDay: "Пн",
-      date: 19,
-      title: "Курка з булгуром",
-      time: 25,
-      price: 78,
-      emoji: "🍲",
-      tag: "Найкращий баланс",
-      ingredients: [
-        { name: "Булгур", amount: "180 г", missing: false },
-        { name: "Морква", amount: "1 шт", missing: false },
-        { name: "Цибуля", amount: "1 шт", missing: false },
-        { name: "Куряче філе", amount: "300 г", missing: true },
-        { name: "Йогурт", amount: "100 г", missing: true },
-      ],
-    },
-    {
-      id: 2,
-      day: "Завтра",
-      shortDay: "Вт",
-      date: 20,
-      title: "Гречка з грибами",
-      time: 18,
-      price: 44,
-      emoji: "🍄",
-      tag: "Найдешевше",
-      ingredients: [
-        { name: "Гречка", amount: "180 г", missing: false },
-        { name: "Цибуля", amount: "1 шт", missing: false },
-        { name: "Печериці", amount: "250 г", missing: true },
-        { name: "Йогурт", amount: "80 г", missing: true },
-      ],
-    },
-    {
-      id: 3,
-      day: "Середа",
-      shortDay: "Ср",
-      date: 21,
-      title: "Теплий салат з квасолею",
-      time: 12,
-      price: 52,
-      emoji: "🥗",
-      tag: "Найшвидше",
-      ingredients: [
-        { name: "Квасоля", amount: "1 банка", missing: false },
-        { name: "Морква", amount: "1 шт", missing: false },
-        { name: "Помідори", amount: "2 шт", missing: false },
-        { name: "Зелень", amount: "пів пучка", missing: true },
-      ],
-    },
-    {
-      id: 4,
-      day: "Четвер",
-      shortDay: "Чт",
-      date: 22,
-      title: "Картопляна фритата",
-      time: 22,
-      price: 39,
-      emoji: "🍳",
-      tag: "З того, що є",
-      ingredients: [
-        { name: "Яйця", amount: "4 шт", missing: false },
-        { name: "Картопля", amount: "400 г", missing: false },
-        { name: "Цибуля", amount: "1 шт", missing: false },
-        { name: "Сир", amount: "60 г", missing: false },
-      ],
-    },
-    {
-      id: 5,
-      day: "П’ятниця",
-      shortDay: "Пт",
-      date: 23,
-      title: "Овочевий суп",
-      time: 30,
-      price: 46,
-      emoji: "🥣",
-      tag: "На два дні",
-      ingredients: [
-        { name: "Картопля", amount: "500 г", missing: false },
-        { name: "Морква", amount: "2 шт", missing: false },
-        { name: "Цибуля", amount: "1 шт", missing: false },
-        { name: "Зелень", amount: "пів пучка", missing: true },
-      ],
-    },
-    {
-      id: 6,
-      day: "Субота",
-      shortDay: "Сб",
-      date: 24,
-      title: "Сирні гарячі тости",
-      time: 10,
-      price: 51,
-      emoji: "🥪",
-      tag: "Дуже швидко",
-      ingredients: [
-        { name: "Хліб", amount: "4 скибки", missing: true },
-        { name: "Сир", amount: "80 г", missing: false },
-        { name: "Помідори", amount: "1 шт", missing: false },
-      ],
-    },
-    {
-      id: 7,
-      day: "Неділя",
-      shortDay: "Нд",
-      date: 25,
-      title: "Запечена картопля",
-      time: 35,
-      price: 43,
-      emoji: "🥔",
-      tag: "Мінімум зусиль",
-      ingredients: [
-        { name: "Картопля", amount: "700 г", missing: false },
-        { name: "Йогурт", amount: "120 г", missing: true },
-        { name: "Зелень", amount: "пів пучка", missing: true },
-      ],
-    },
-  ],
-  productCatalog: [],
-  recipeCatalog: [],
-};
-
-const cookingGuides = {
-  "Курка з булгуром": [
-    "Промий булгур. Залий його водою у співвідношенні один до двох, трохи посоли й вари 12–15 хвилин.",
-    "Наріж куряче філе невеликими шматочками, а моркву та цибулю — кубиками.",
-    "Обсмаж курку 5–6 хвилин на добре розігрітій пательні.",
-    "Додай овочі та готуй ще 5 хвилин, поки вони не стануть м’якими.",
-    "Змішай курку з булгуром. Подай з ложкою натурального йогурту.",
-  ],
-  "Гречка з грибами": [
-    "Промий гречку, залий двома частинами води та вари під кришкою 15 хвилин.",
-    "Наріж цибулю й печериці.",
-    "Обсмаж цибулю 2 хвилини, додай гриби та готуй ще 6–7 хвилин.",
-    "Змішай гриби з готовою гречкою, посоли й додай ложку йогурту перед подачею.",
-  ],
-  "Теплий салат з квасолею": [
-    "Злий рідину з квасолі та промий її.",
-    "Наріж моркву тонкою соломкою, а помідори — часточками.",
-    "Прогрій квасолю з морквою на пательні 5 хвилин.",
-    "Зніми з вогню, додай помідори, зелень, сіль та трохи олії.",
-  ],
-  "Картопляна фритата": [
-    "Наріж картоплю тонкими скибками, а цибулю — півкільцями.",
-    "Обсмаж картоплю з цибулею під кришкою 10 хвилин.",
-    "Збий яйця з дрібкою солі та залий ними картоплю.",
-    "Посип сиром і готуй під кришкою ще 7–8 хвилин на малому вогні.",
-  ],
-  "Овочевий суп": [
-    "Постав 1,5 літра води на вогонь.",
-    "Наріж картоплю кубиками й вари 10 хвилин.",
-    "Додай нарізані моркву та цибулю, посоли й вари ще 12–15 хвилин.",
-    "Вимкни вогонь, додай зелень і дай супу постояти 5 хвилин.",
-  ],
-  "Сирні гарячі тости": [
-    "Наріж помідор тонкими скибками.",
-    "Виклади на хліб сир і помідор.",
-    "Підсмаж тости на сухій пательні під кришкою по 3–4 хвилини з кожного боку.",
-  ],
-  "Запечена картопля": [
-    "Розігрій духовку до 210 градусів.",
-    "Добре помий картоплю, наріж часточками та змішай із сіллю й ложкою олії.",
-    "Запікай 30–35 хвилин, один раз перемішавши.",
-    "Змішай йогурт із зеленню та подай як соус.",
-  ],
-};
-
-const starterProductCatalog = [
-  { id: 101, name: "Рис", amount: "500 г", price: 48, category: "Бакалія", emoji: "🍚" },
-  { id: 102, name: "Макарони", amount: "500 г", price: 46, category: "Бакалія", emoji: "🍝" },
-  { id: 103, name: "Вівсянка", amount: "500 г", price: 42, category: "Бакалія", emoji: "🥣" },
-  { id: 104, name: "Сочевиця", amount: "400 г", price: 57, category: "Бакалія", emoji: "🫘" },
-  { id: 105, name: "Кускус", amount: "400 г", price: 55, category: "Бакалія", emoji: "🌾" },
-  { id: 106, name: "Борошно", amount: "1 кг", price: 38, category: "Бакалія", emoji: "🌾" },
-  { id: 107, name: "Олія", amount: "850 мл", price: 72, category: "Бакалія", emoji: "🫗" },
-  { id: 108, name: "Томати консервовані", amount: "1 банка", price: 54, category: "Бакалія", emoji: "🥫" },
-  { id: 109, name: "Нут", amount: "1 банка", price: 49, category: "Бакалія", emoji: "🫛" },
-  { id: 110, name: "Тунець", amount: "1 банка", price: 79, category: "М’ясо та риба", emoji: "🐟" },
-  { id: 111, name: "Риба біла", amount: "500 г", price: 145, category: "М’ясо та риба", emoji: "🐟" },
-  { id: 112, name: "Фарш курячий", amount: "500 г", price: 105, category: "М’ясо та риба", emoji: "🍗" },
-  { id: 113, name: "Молоко", amount: "900 мл", price: 48, category: "Молочне", emoji: "🥛" },
-  { id: 114, name: "Сметана", amount: "300 г", price: 44, category: "Молочне", emoji: "🥛" },
-  { id: 115, name: "Кисломолочний сир", amount: "350 г", price: 78, category: "Молочне", emoji: "🧀" },
-  { id: 116, name: "Вершки", amount: "200 мл", price: 52, category: "Молочне", emoji: "🥛" },
-  { id: 117, name: "Банани", amount: "1 кг", price: 62, category: "Фрукти", emoji: "🍌" },
-  { id: 118, name: "Яблука", amount: "1 кг", price: 45, category: "Фрукти", emoji: "🍎" },
-  { id: 119, name: "Часник", amount: "1 головка", price: 14, category: "Овочі", emoji: "🧄" },
-  { id: 120, name: "Перець солодкий", amount: "500 г", price: 69, category: "Овочі", emoji: "🫑" },
-  { id: 121, name: "Кабачок", amount: "1 шт", price: 39, category: "Овочі", emoji: "🥒" },
-  { id: 122, name: "Броколі", amount: "400 г", price: 72, category: "Овочі", emoji: "🥦" },
-  { id: 123, name: "Гарбуз", amount: "1 кг", price: 38, category: "Овочі", emoji: "🎃" },
-  { id: 124, name: "Огірки", amount: "500 г", price: 52, category: "Овочі", emoji: "🥒" },
-  { id: 125, name: "Капуста", amount: "1 кг", price: 34, category: "Овочі", emoji: "🥬" },
-  { id: 126, name: "Лаваш", amount: "2 шт", price: 39, category: "Хліб", emoji: "🫓" },
-  { id: 127, name: "Лимон", amount: "1 шт", price: 18, category: "Фрукти", emoji: "🍋" },
-  { id: 128, name: "Заморожені овочі", amount: "400 г", price: 62, category: "Заморожене", emoji: "🥦" },
-  { id: 129, name: "Кукурудза", amount: "1 банка", price: 43, category: "Бакалія", emoji: "🌽" },
-  { id: 130, name: "Соєвий соус", amount: "250 мл", price: 58, category: "Соуси", emoji: "🥫" },
-];
-
-const starterRecipeCatalog = [
-  {
-    id: 1001,
-    title: "Рис з овочами та яйцем",
-    time: 18,
-    price: 45,
-    emoji: "🍚",
-    tag: "Швидка пательня",
-    ingredients: [
-      { name: "Рис", amount: "180 г" },
-      { name: "Заморожені овочі", amount: "250 г" },
-      { name: "Яйця", amount: "2 шт" },
-      { name: "Соєвий соус", amount: "2 ст. ложки" },
-    ],
-    steps: [
-      "Відвари рис до готовності та дай йому трохи охолонути.",
-      "Обсмаж заморожені овочі 6–7 хвилин на великому вогні.",
-      "Посунь овочі вбік, розбий яйця й швидко перемішай.",
-      "Додай рис і соєвий соус, прогрій усе разом ще 3 хвилини.",
-    ],
-  },
-  {
-    id: 1002,
-    title: "Паста з тунцем",
-    time: 15,
-    price: 69,
-    emoji: "🍝",
-    tag: "15 хвилин",
-    ingredients: [
-      { name: "Макарони", amount: "200 г" },
-      { name: "Тунець", amount: "1 банка" },
-      { name: "Томати консервовані", amount: "200 г" },
-      { name: "Часник", amount: "1 зубчик" },
-    ],
-    steps: [
-      "Відвари макарони у підсоленій воді.",
-      "Прогрій на пательні подрібнений часник і консервовані томати.",
-      "Додай тунець без рідини та готуй 3 хвилини.",
-      "Змішай соус із макаронами та подавай.",
-    ],
-  },
-  {
-    id: 1003,
-    title: "Сочевичне карі",
-    time: 25,
-    price: 54,
-    emoji: "🍛",
-    tag: "Ситно без м’яса",
-    ingredients: [
-      { name: "Сочевиця", amount: "200 г" },
-      { name: "Томати консервовані", amount: "250 г" },
-      { name: "Цибуля", amount: "1 шт" },
-      { name: "Морква", amount: "1 шт" },
-    ],
-    steps: [
-      "Промий сочевицю та постав варитися у двох частинах води.",
-      "Обсмаж нарізані цибулю й моркву 5 хвилин.",
-      "Додай томати, карі або улюблені спеції та тушкуй 5 хвилин.",
-      "Змішай із сочевицею й готуй до м’якості ще 8–10 хвилин.",
-    ],
-  },
-  {
-    id: 1004,
-    title: "Вівсянка з бананом",
-    time: 8,
-    price: 31,
-    emoji: "🥣",
-    tag: "Найшвидший сніданок",
-    ingredients: [
-      { name: "Вівсянка", amount: "80 г" },
-      { name: "Молоко", amount: "250 мл" },
-      { name: "Банани", amount: "1 шт" },
-    ],
-    steps: [
-      "Залий вівсянку молоком і вари 5–6 хвилин, помішуючи.",
-      "Розімни половину банана та додай у кашу.",
-      "Наріж решту банана зверху й подавай.",
-    ],
-  },
-  {
-    id: 1005,
-    title: "Шакшука",
-    time: 20,
-    price: 49,
-    emoji: "🍳",
-    tag: "Одна пательня",
-    ingredients: [
-      { name: "Яйця", amount: "4 шт" },
-      { name: "Томати консервовані", amount: "300 г" },
-      { name: "Перець солодкий", amount: "1 шт" },
-      { name: "Цибуля", amount: "1 шт" },
-    ],
-    steps: [
-      "Обсмаж нарізані цибулю та перець 5 хвилин.",
-      "Додай томати, сіль і спеції та тушкуй 7 хвилин.",
-      "Зроби заглиблення, вбий яйця й накрий кришкою.",
-      "Готуй 5–6 хвилин, щоб білок схопився.",
-    ],
-  },
-  {
-    id: 1006,
-    title: "Кускус з нутом",
-    time: 12,
-    price: 52,
-    emoji: "🥗",
-    tag: "Без варіння",
-    ingredients: [
-      { name: "Кускус", amount: "180 г" },
-      { name: "Нут", amount: "1 банка" },
-      { name: "Огірки", amount: "1 шт" },
-      { name: "Помідори", amount: "2 шт" },
-      { name: "Лимон", amount: "пів шт" },
-    ],
-    steps: [
-      "Залий кускус окропом, накрий і залиш на 7 хвилин.",
-      "Промий нут, наріж огірок і помідори.",
-      "Розпуши кускус виделкою та змішай з овочами й нутом.",
-      "Заправ лимонним соком, олією та сіллю.",
-    ],
-  },
-  {
-    id: 1007,
-    title: "Крем-суп з гарбуза",
-    time: 35,
-    price: 47,
-    emoji: "🎃",
-    tag: "На два обіди",
-    ingredients: [
-      { name: "Гарбуз", amount: "700 г" },
-      { name: "Картопля", amount: "250 г" },
-      { name: "Морква", amount: "1 шт" },
-      { name: "Вершки", amount: "100 мл" },
-    ],
-    steps: [
-      "Наріж гарбуз, картоплю та моркву кубиками.",
-      "Залий овочі водою до рівня продуктів і вари 25 хвилин.",
-      "Збий суп блендером до однорідності.",
-      "Додай вершки, сіль і прогрій ще 2 хвилини.",
-    ],
-  },
-  {
-    id: 1008,
-    title: "Салат з тунцем і квасолею",
-    time: 10,
-    price: 62,
-    emoji: "🥗",
-    tag: "Без плити",
-    ingredients: [
-      { name: "Тунець", amount: "1 банка" },
-      { name: "Квасоля", amount: "1 банка" },
-      { name: "Кукурудза", amount: "пів банки" },
-      { name: "Огірки", amount: "1 шт" },
-    ],
-    steps: [
-      "Злий рідину з тунця, квасолі та кукурудзи.",
-      "Наріж огірок невеликими кубиками.",
-      "Змішай усе, додай сіль, перець і трохи олії.",
-    ],
-  },
-  {
-    id: 1009,
-    title: "Лаваш з куркою й овочами",
-    time: 20,
-    price: 76,
-    emoji: "🌯",
-    tag: "Зручно із собою",
-    ingredients: [
-      { name: "Лаваш", amount: "2 шт" },
-      { name: "Куряче філе", amount: "250 г" },
-      { name: "Капуста", amount: "150 г" },
-      { name: "Огірки", amount: "1 шт" },
-      { name: "Йогурт", amount: "100 г" },
-    ],
-    steps: [
-      "Наріж курку смужками й обсмаж 8–10 хвилин.",
-      "Тонко нашаткуй капусту та наріж огірок.",
-      "Змасти лаваш йогуртом, виклади начинку й загорни.",
-      "Підрум’янь лаваш по 2 хвилини з кожного боку.",
-    ],
-  },
-  {
-    id: 1010,
-    title: "Сирники",
-    time: 25,
-    price: 58,
-    emoji: "🥞",
-    tag: "Домашній сніданок",
-    ingredients: [
-      { name: "Кисломолочний сир", amount: "350 г" },
-      { name: "Яйця", amount: "1 шт" },
-      { name: "Борошно", amount: "70 г" },
-      { name: "Сметана", amount: "80 г" },
-    ],
-    steps: [
-      "Змішай сир, яйце, дрібку солі та половину борошна.",
-      "Сформуй сирники й обкачай у решті борошна.",
-      "Обсмаж на малому вогні по 4–5 хвилин з кожного боку.",
-      "Подай зі сметаною.",
-    ],
-  },
-  {
-    id: 1011,
-    title: "Запечена риба з броколі",
-    time: 30,
-    price: 98,
-    emoji: "🐟",
-    tag: "Легка вечеря",
-    ingredients: [
-      { name: "Риба біла", amount: "400 г" },
-      { name: "Броколі", amount: "300 г" },
-      { name: "Лимон", amount: "пів шт" },
-      { name: "Йогурт", amount: "100 г" },
-    ],
-    steps: [
-      "Розігрій духовку до 200 градусів.",
-      "Посоли рибу, скропи лимоном і виклади у форму.",
-      "Поруч розклади броколі та запікай 20–25 хвилин.",
-      "Подай з йогуртовим соусом.",
-    ],
-  },
-  {
-    id: 1012,
-    title: "Паста з грибами у вершках",
-    time: 20,
-    price: 63,
-    emoji: "🍄",
-    tag: "Комфортна вечеря",
-    ingredients: [
-      { name: "Макарони", amount: "200 г" },
-      { name: "Печериці", amount: "250 г" },
-      { name: "Вершки", amount: "150 мл" },
-      { name: "Цибуля", amount: "1 шт" },
-    ],
-    steps: [
-      "Відвари макарони до стану аль денте.",
-      "Обсмаж цибулю та нарізані гриби 7–8 хвилин.",
-      "Додай вершки, сіль і прогрій 3 хвилини.",
-      "Змішай соус із макаронами.",
-    ],
-  },
-];
-
-defaultState.productCatalog = starterProductCatalog;
-defaultState.recipeCatalog = starterRecipeCatalog;
+import { LOCAL_DB_STATE_KEY, STORAGE_KEY, availableViews, defaultState } from "./app/data.js";
+import { escapeHtml, parseLines, pluralize } from "./app/utils.js";
+import { categoryEmoji, formatMoney, getWeekRangeLabel, icon } from "./app/ui.js";
+import {
+  findCatalogProduct as findCatalogProductInCatalog,
+  sameProduct as sameProductInCatalog,
+  linkStateProducts,
+  hydrateState,
+  normalizeMeal,
+  remainingItems as getRemainingItems,
+  shoppingTotal as getShoppingTotal,
+  checkedTotal as getCheckedTotal,
+  getSortedSuggestions as getStateSuggestions,
+  parseIngredients as parseStateIngredients,
+  findPantryIngredient as findStatePantryIngredient,
+  syncIngredientAvailability as syncStateIngredientAvailability,
+  consumePantryAmount as consumeStatePantryAmount,
+  inferCategory as inferStateCategory,
+  estimatePrice as estimateStatePrice,
+  syncMealDates as syncStateMealDates,
+  getAlternativeText,
+} from "./app/state.js";
 
 let state = structuredClone(defaultState);
 let toastTimer;
@@ -491,73 +38,57 @@ const modalBackdrop = document.querySelector("#modalBackdrop");
 const modalSheet = document.querySelector("#modalSheet");
 const toast = document.querySelector("#toast");
 const shoppingBadge = document.querySelector("#shoppingBadge");
-const availableViews = ["home", "menu", "shopping", "pantry"];
 
-function normalizeProductId(value) {
-  const numeric = Number(value);
-  return Number.isInteger(numeric) ? numeric : null;
+function findCatalogProduct(target) {
+  return findCatalogProductInCatalog(target, state.productCatalog);
 }
 
-function findCatalogProduct(target, catalog = state.productCatalog) {
-  const productId = normalizeProductId(typeof target === "object" ? target?.productId : null);
-  if (productId !== null) {
-    const exactMatch = catalog.find((item) => item.id === productId);
-    if (exactMatch) return exactMatch;
-  }
-
-  const name = typeof target === "string" ? target : target?.name;
-  if (!name) return null;
-  const normalized = normalizeIngredientName(name);
-  return catalog.find((item) => normalizeIngredientName(item.name) === normalized) || null;
+function sameProduct(left, right) {
+  return sameProductInCatalog(left, right, state.productCatalog);
 }
 
-function getProductKey(target, catalog = state.productCatalog) {
-  const catalogMatch = findCatalogProduct(target, catalog);
-  const explicitProductId = normalizeProductId(typeof target === "object" ? target?.productId : null);
-  const productId = explicitProductId ?? catalogMatch?.id ?? null;
-
-  if (productId !== null) return `product:${productId}`;
-
-  const name = typeof target === "string" ? target : target?.name;
-  if (!name) return "";
-  return `name:${normalizeIngredientName(name)}`;
+function remainingItems() {
+  return getRemainingItems(state);
 }
 
-function sameProduct(left, right, catalog = state.productCatalog) {
-  const leftKey = getProductKey(left, catalog);
-  const rightKey = getProductKey(right, catalog);
-  return Boolean(leftKey && rightKey && leftKey === rightKey);
+function shoppingTotal() {
+  return getShoppingTotal(state);
 }
 
-function attachProductLink(entry, catalog) {
-  if (!entry?.name) return entry;
-  if (normalizeProductId(entry.productId) !== null) return entry;
-
-  const catalogMatch = findCatalogProduct(entry, catalog);
-  if (!catalogMatch) return entry;
-  return {
-    ...entry,
-    productId: catalogMatch.id,
-  };
+function checkedTotal() {
+  return getCheckedTotal(state);
 }
 
-function linkStateProducts(nextState) {
-  const catalog = Array.isArray(nextState.productCatalog) ? nextState.productCatalog : [];
-  const linkIngredients = (collection) =>
-    Array.isArray(collection)
-      ? collection.map((meal) => ({
-          ...meal,
-          ingredients: Array.isArray(meal.ingredients) ? meal.ingredients.map((ingredient) => attachProductLink(ingredient, catalog)) : [],
-        }))
-      : [];
+function getSortedSuggestions() {
+  return getStateSuggestions(state);
+}
 
-  return {
-    ...nextState,
-    pantry: Array.isArray(nextState.pantry) ? nextState.pantry.map((item) => attachProductLink(item, catalog)) : [],
-    shopping: Array.isArray(nextState.shopping) ? nextState.shopping.map((item) => attachProductLink(item, catalog)) : [],
-    meals: linkIngredients(nextState.meals),
-    recipeCatalog: linkIngredients(nextState.recipeCatalog),
-  };
+function parseIngredients(value) {
+  return parseStateIngredients(value, state);
+}
+
+function findPantryIngredient(target) {
+  return findStatePantryIngredient(target, state.pantry, state.productCatalog);
+}
+
+function syncIngredientAvailability() {
+  syncStateIngredientAvailability(state);
+}
+
+function consumePantryAmount(itemId, usedAmount) {
+  consumeStatePantryAmount(state, itemId, usedAmount);
+}
+
+function inferCategory(target) {
+  return inferStateCategory(target, state.productCatalog);
+}
+
+function estimatePrice(target) {
+  return estimateStatePrice(target, state.productCatalog);
+}
+
+function syncMealDates() {
+  syncStateMealDates(state);
 }
 
 function isNormalizedCloudUnavailable(error) {
@@ -616,63 +147,6 @@ async function persistCloudState(snapshot) {
   } else {
     updateSyncIndicator("offline");
   }
-}
-
-function hydrateState(saved) {
-  const base = structuredClone(defaultState);
-  const source = saved || {};
-  const hydrated = {
-    ...base,
-    ...source,
-    meals: Array.isArray(source.meals) ? source.meals : base.meals,
-    shopping: Array.isArray(source.shopping) ? source.shopping : base.shopping,
-    pantry: Array.isArray(source.pantry) ? source.pantry : base.pantry,
-    productCatalog: mergeStarterCatalog(source.productCatalog, base.productCatalog),
-    recipeCatalog: mergeStarterCatalog(source.recipeCatalog, base.recipeCatalog),
-    dataVersion: STARTER_DATA_VERSION,
-  };
-
-  hydrated.meals = hydrated.meals.map(normalizeMeal);
-  hydrated.recipeCatalog = hydrated.recipeCatalog.map(normalizeMeal);
-  hydrated.selectedDay = Math.min(Math.max(Number(hydrated.selectedDay) || 0, 0), Math.max(hydrated.meals.length - 1, 0));
-  return linkStateProducts(hydrated);
-}
-
-function mergeStarterCatalog(savedCatalog, starterCatalog) {
-  const saved = Array.isArray(savedCatalog) ? savedCatalog : [];
-  const merged = [...saved];
-
-  starterCatalog.forEach((starterItem) => {
-    const exists = merged.some(
-      (item) =>
-        item.id === starterItem.id ||
-        normalizeIngredientName(item.name || item.title) === normalizeIngredientName(starterItem.name || starterItem.title),
-    );
-    if (!exists) merged.push(structuredClone(starterItem));
-  });
-
-  return merged;
-}
-
-function normalizeMeal(meal) {
-  const steps = Array.isArray(meal.steps) && meal.steps.length ? meal.steps : cookingGuides[meal.title];
-
-  return {
-    ...meal,
-    ingredients: Array.isArray(meal.ingredients)
-      ? meal.ingredients.map((ingredient) => ({
-          ...ingredient,
-          missing: typeof ingredient.missing === "boolean" ? ingredient.missing : true,
-        }))
-      : [],
-    steps: steps?.length
-      ? steps
-      : [
-          "Підготуй усі інгредієнти та кухонне приладдя.",
-          "Приготуй основні продукти до готовності, орієнтуючись на їхню текстуру.",
-          "З’єднай усе разом, додай сіль і спеції на смак та подавай гарячим.",
-        ],
-  };
 }
 
 function getSessionUser(sessionResult) {
@@ -924,34 +398,6 @@ function updateSyncIndicator(status) {
   indicator.classList.toggle("offline", status === "offline");
   indicator.querySelector("span:last-child").textContent =
     status === "offline" ? "Офлайн — зміни лишилися на телефоні" : "Синхронізовано з Neon";
-}
-
-function formatMoney(value) {
-  return `${Math.round(value)} ₴`;
-}
-
-function remainingItems() {
-  return state.shopping.filter((item) => !item.checked);
-}
-
-function shoppingTotal() {
-  return state.shopping.reduce((sum, item) => sum + item.price, 0);
-}
-
-function checkedTotal() {
-  return state.shopping.filter((item) => item.checked).reduce((sum, item) => sum + item.price, 0);
-}
-
-function getSortedSuggestions() {
-  return state.meals.slice(1).map((meal) => ({
-    ...meal,
-    available: meal.ingredients.filter((ingredient) => !ingredient.missing).length,
-    total: meal.ingredients.length,
-  })).sort((a, b) => {
-    if (state.priority === "price") return a.price - b.price || a.time - b.time;
-    if (state.priority === "time") return a.time - b.time || a.price - b.price;
-    return a.price + a.time * 1.8 - (b.price + b.time * 1.8);
-  }).slice(0, 3);
 }
 
 function render() {
@@ -2640,242 +2086,6 @@ function showToast(message) {
   toast.textContent = message;
   toast.classList.add("visible");
   toastTimer = setTimeout(() => toast.classList.remove("visible"), 2400);
-}
-
-function getAlternativeText(meal) {
-  if (meal.title.toLowerCase().includes("кур")) return "Заміни курку на квасолю, а йогурт — на ложку олії.";
-  if (meal.title.toLowerCase().includes("гриб")) return "Заміни гриби на моркву з цибулею, які вже є вдома.";
-  return "Продукт, якого бракує, можна пропустити або замінити сезонним овочем.";
-}
-
-function parseLines(value) {
-  return String(value)
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
-}
-
-function parseIngredients(value) {
-  return parseLines(value).map((line) => {
-    const [rawName, ...rawAmount] = line.split("|");
-    const name = rawName.trim();
-    const amount = rawAmount.join("|").trim() || "за смаком";
-
-    return {
-      name,
-      amount,
-      missing: !hasPantryIngredient(name),
-    };
-  });
-}
-
-function hasPantryIngredient(name) {
-  return Boolean(findPantryIngredient(name));
-}
-
-function findPantryIngredient(target) {
-  const productKey = getProductKey(target);
-  if (productKey) {
-    const exactMatch = state.pantry.find((item) => getProductKey(item) === productKey);
-    if (exactMatch) return exactMatch;
-  }
-
-  const name = typeof target === "string" ? target : target?.name;
-  if (!name) return null;
-  const normalized = normalizeIngredientName(name);
-  return state.pantry.find((item) => {
-    const pantryName = normalizeIngredientName(item.name);
-    return pantryName.includes(normalized) || normalized.includes(pantryName);
-  });
-}
-
-function normalizeIngredientName(name) {
-  return String(name)
-    .toLowerCase()
-    .replaceAll("’", "")
-    .replaceAll("'", "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function syncIngredientAvailability() {
-  [...state.meals, ...state.recipeCatalog].forEach((meal) => {
-    meal.ingredients.forEach((ingredient) => {
-      ingredient.missing = !hasPantryIngredient(ingredient);
-    });
-  });
-}
-
-function consumePantryAmount(itemId, usedAmount) {
-  const index = state.pantry.findIndex((item) => item.id === itemId);
-  if (index < 0) return;
-
-  const item = state.pantry[index];
-  const available = parseQuantity(item.amount);
-  const used = parseQuantity(usedAmount);
-
-  if (!available || !used || available.dimension !== used.dimension) {
-    item.low = true;
-    return;
-  }
-
-  const remaining = available.baseValue - used.baseValue;
-  if (remaining <= 0.0001) {
-    state.pantry.splice(index, 1);
-    return;
-  }
-
-  item.amount = formatQuantity(remaining, available);
-  item.low = remaining / available.baseValue <= 0.35 || (available.dimension === "count" && remaining <= 2);
-}
-
-function parseQuantity(value) {
-  const normalized = String(value).toLowerCase().replace(",", ".").trim();
-  const numericMatch = normalized.match(/\d+(?:\.\d+)?/);
-  const number = normalized.includes("пів") ? 0.5 : Number(numericMatch?.[0]);
-  if (!Number.isFinite(number)) return null;
-
-  const units = [
-    { pattern: /кг/, dimension: "mass", factor: 1000, unit: "кг" },
-    { pattern: /(^|\s)г($|\s)/, dimension: "mass", factor: 1, unit: "г" },
-    { pattern: /мл/, dimension: "volume", factor: 1, unit: "мл" },
-    { pattern: /(^|\s)л($|\s)/, dimension: "volume", factor: 1000, unit: "л" },
-    { pattern: /шт/, dimension: "count", factor: 1, unit: "шт" },
-    { pattern: /банк/, dimension: "container", factor: 1, unit: "банка" },
-    { pattern: /пуч/, dimension: "bundle", factor: 1, unit: "пучка" },
-    { pattern: /скиб/, dimension: "slice", factor: 1, unit: "скибки" },
-  ];
-  const matchedUnit = units.find((entry) => entry.pattern.test(normalized));
-  if (!matchedUnit) return null;
-
-  return {
-    ...matchedUnit,
-    baseValue: number * matchedUnit.factor,
-  };
-}
-
-function formatQuantity(baseValue, quantity) {
-  const displayValue = baseValue / quantity.factor;
-  const rounded = Math.round(displayValue * 100) / 100;
-  return `${String(rounded).replace(".", ",")} ${quantity.unit}`;
-}
-
-function inferCategory(target) {
-  const catalogMatch = findCatalogProduct(target);
-  if (catalogMatch) return catalogMatch.category;
-
-  const name = typeof target === "string" ? target : target?.name || "";
-  const normalized = name.toLowerCase();
-  if (["йогурт", "сир", "молоко", "вершки"].some((word) => normalized.includes(word))) return "Молочне";
-  if (["кур", "м’яс", "риба"].some((word) => normalized.includes(word))) return "М’ясо та риба";
-  if (["булгур", "греч", "хліб", "рис", "макарон"].some((word) => normalized.includes(word))) return "Бакалія";
-  return "Овочі";
-}
-
-function estimatePrice(target) {
-  const catalogMatch = findCatalogProduct(target);
-  if (catalogMatch) return catalogMatch.price;
-
-  const name = typeof target === "string" ? target : target?.name;
-  const prices = {
-    "Куряче філе": 96,
-    Йогурт: 31,
-    Печериці: 42,
-    Зелень: 22,
-    Хліб: 36,
-  };
-  return prices[name] || 35;
-}
-
-function categoryEmoji(category) {
-  if (category === "Молочне") return "🥛";
-  if (category === "М’ясо та риба") return "🍗";
-  if (category === "Бакалія") return "🌾";
-  return "🥬";
-}
-
-function syncMealDates() {
-  const shortDays = ["Нд", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"];
-  const fullDays = ["Неділя", "Понеділок", "Вівторок", "Середа", "Четвер", "П’ятниця", "Субота"];
-  const today = new Date();
-  today.setHours(12, 0, 0, 0);
-
-  state.meals = state.meals.map((meal, index) => {
-    const date = new Date(today);
-    date.setDate(today.getDate() + index);
-    return {
-      ...meal,
-      day: index === 0 ? "Сьогодні" : index === 1 ? "Завтра" : fullDays[date.getDay()],
-      shortDay: shortDays[date.getDay()],
-      date: date.getDate(),
-    };
-  });
-}
-
-function getWeekRangeLabel(dayCount = 7) {
-  const months = [
-    "січня",
-    "лютого",
-    "березня",
-    "квітня",
-    "травня",
-    "червня",
-    "липня",
-    "серпня",
-    "вересня",
-    "жовтня",
-    "листопада",
-    "грудня",
-  ];
-  const start = new Date();
-  const end = new Date(start);
-  end.setDate(start.getDate() + Math.max(dayCount - 1, 0));
-
-  if (start.getMonth() === end.getMonth()) {
-    return `${start.getDate()}–${end.getDate()} ${months[end.getMonth()]}`;
-  }
-  return `${start.getDate()} ${months[start.getMonth()]} — ${end.getDate()} ${months[end.getMonth()]}`;
-}
-
-function pluralize(number, one, few, many) {
-  const mod10 = number % 10;
-  const mod100 = number % 100;
-  if (mod10 === 1 && mod100 !== 11) return one;
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return few;
-  return many;
-}
-
-function escapeHtml(value) {
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
-}
-
-function icon(name) {
-  const icons = {
-    arrow: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>',
-    clock: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
-    wallet: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h15a2 2 0 0 1 2 2v9H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h13v3"/><path d="M16 12h5"/></svg>',
-    chef: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10a4 4 0 1 1 2-7 4.5 4.5 0 0 1 7.8 2A3.5 3.5 0 1 1 18 12H7a3 3 0 0 1 0-6"/><path d="M7 12v8h11v-8M9 16h7"/></svg>',
-    swap: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m16 3 4 4-4 4M20 7H4M8 21l-4-4 4-4M4 17h16"/></svg>',
-    spark: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 1.2 4.1L17 9l-3.8 1.9L12 15l-1.2-4.1L7 9l3.8-1.9L12 3ZM18.5 15l.7 2.3 2.3.7-2.3.7-.7 2.3-.7-2.3-2.3-.7 2.3-.7.7-2.3ZM5 13l.7 2.3L8 16l-2.3.7L5 19l-.7-2.3L2 16l2.3-.7L5 13Z"/></svg>',
-    cart: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="20" r="1"/><circle cx="19" cy="20" r="1"/><path d="M3 4h2l2.4 11.2a2 2 0 0 0 2 1.6h7.8a2 2 0 0 0 2-1.6L21 8H6"/></svg>',
-    bell: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg>',
-    plus: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>',
-    search: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>',
-    edit: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 20 4.2-1 10.6-10.6a2.1 2.1 0 0 0-3-3L5.2 16 4 20ZM14.5 6.5l3 3"/></svg>',
-    trash: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 3h6l1 4H8l1-4ZM7 7l1 14h8l1-14M10 11v6M14 11v6"/></svg>',
-    save: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h12l2 2v14H5V4Z"/><path d="M8 4v6h8V4M8 20v-6h8v6"/></svg>',
-    volume: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 9h4l5-4v14l-5-4H5V9ZM17 9a4 4 0 0 1 0 6M19 6a8 8 0 0 1 0 12"/></svg>',
-    back: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5M11 18l-6-6 6-6"/></svg>',
-    check: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>',
-    users: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3 20a6 6 0 0 1 12 0M14 15a5 5 0 0 1 7 4.5"/></svg>',
-    logout: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 5H5v14h5M14 8l4 4-4 4M8 12h10"/></svg>',
-  };
-  return icons[name] || "";
 }
 
 async function bootstrap() {
