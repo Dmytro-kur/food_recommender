@@ -18,6 +18,8 @@ import {
   linkStateProducts,
   hydrateState,
   normalizeMeal,
+  mergeSharedState,
+  areStatesEqual,
   remainingItems as getRemainingItems,
   parseIngredients as parseStateIngredients,
   findPantryIngredient as findStatePantryIngredient,
@@ -38,6 +40,13 @@ let accessProfile = null;
 let familyGroups = [];
 let activeFamilyGroup = null;
 let cloudStateExists = false;
+let lastSyncedCloudState = null;
+let lastSyncedCloudUpdatedAt = null;
+let hasPendingCloudChanges = false;
+let skipNextCloudSave = false;
+let cloudSyncInterval = null;
+let cloudSyncInFlight = false;
+let cloudSyncQueued = false;
 let authFormMode = "sign-in";
 let isBootstrapping = false;
 
@@ -46,6 +55,7 @@ const modalBackdrop = document.querySelector("#modalBackdrop");
 const modalSheet = document.querySelector("#modalSheet");
 const toast = document.querySelector("#toast");
 const shoppingBadge = document.querySelector("#shoppingBadge");
+const CLOUD_SYNC_INTERVAL_MS = 4000;
 
 function findCatalogProduct(target) {
   return findCatalogProductInCatalog(target, state.productCatalog);
@@ -103,6 +113,10 @@ function isScopedStateRpcUnavailable(error) {
   return message.includes("load_scoped_app_state") || message.includes("save_scoped_app_state");
 }
 
+function isConditionalSaveRpcUnavailable(error) {
+  return String(error?.message || "").includes("save_scoped_app_state_if_fresh");
+}
+
 function isFamilyGroupsUnavailable(error) {
   const message = String(error?.message || "");
   return (
@@ -152,6 +166,68 @@ function setFamilyContext(groups = []) {
   activeFamilyGroup = familyGroups.find((group) => group.is_active) || null;
 }
 
+function rememberCloudSnapshot(snapshot, updatedAt = null) {
+  lastSyncedCloudState = snapshot ? getCurrentStateSnapshot(snapshot) : null;
+  lastSyncedCloudUpdatedAt = updatedAt || null;
+}
+
+function clearCloudSnapshot() {
+  rememberCloudSnapshot(null, null);
+  hasPendingCloudChanges = false;
+}
+
+function getCurrentStateSnapshot(source = state) {
+  const snapshot = linkStateProducts(structuredClone(source));
+  delete snapshot.activeView;
+  delete snapshot.selectedDay;
+  return snapshot;
+}
+
+function restoreUiState(nextState, uiState) {
+  if (availableViews.includes(uiState.activeView)) {
+    nextState.activeView = uiState.activeView;
+  }
+  nextState.selectedDay = Math.min(
+    Math.max(Number(uiState.selectedDay) || 0, 0),
+    Math.max(nextState.meals.length - 1, 0),
+  );
+}
+
+function applyStateSnapshot(snapshot, { preserveUi = false, scheduleCloud = false, markDirty = false } = {}) {
+  const uiState = preserveUi
+    ? {
+        activeView: state.activeView,
+        selectedDay: state.selectedDay,
+      }
+    : null;
+
+  state = hydrateState(snapshot);
+  if (uiState) {
+    restoreUiState(state, uiState);
+  }
+  syncMealDates();
+  syncIngredientAvailability();
+  hasPendingCloudChanges = markDirty;
+  skipNextCloudSave = !scheduleCloud;
+  render();
+}
+
+function stopCloudSyncLoop() {
+  clearInterval(cloudSyncInterval);
+  cloudSyncInterval = null;
+  cloudSyncInFlight = false;
+  cloudSyncQueued = false;
+}
+
+function startCloudSyncLoop() {
+  stopCloudSyncLoop();
+  if (!neonClient || !currentUser || accessProfile?.status !== "active") return;
+
+  cloudSyncInterval = setInterval(() => {
+    requestCloudSync("interval");
+  }, CLOUD_SYNC_INTERVAL_MS);
+}
+
 function loadLegacyState() {
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
@@ -163,20 +239,30 @@ function loadLegacyState() {
 
 function saveState() {
   clearTimeout(saveTimer);
-  const snapshot = linkStateProducts(structuredClone(state));
+  const localSnapshot = linkStateProducts(structuredClone(state));
+  const cloudSnapshot = getCurrentStateSnapshot(localSnapshot);
   const localKey = currentUser ? getScopedLocalStateKey(currentUser.id) : LOCAL_DB_STATE_KEY;
 
   saveTimer = setTimeout(async () => {
     try {
-      await writeState(snapshot, localKey);
+      await writeState(localSnapshot, localKey);
       localStorage.removeItem(STORAGE_KEY);
     } catch {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(localSnapshot));
     }
   }, 80);
 
+  if (skipNextCloudSave) {
+    skipNextCloudSave = false;
+    return;
+  }
+
   if (currentUser && accessProfile?.status === "active") {
-    scheduleCloudSave(snapshot);
+    if (!hasPendingCloudChanges && areStatesEqual(cloudSnapshot, lastSyncedCloudState)) {
+      return;
+    }
+    hasPendingCloudChanges = true;
+    scheduleCloudSave(cloudSnapshot);
   }
 }
 
@@ -190,38 +276,79 @@ function scheduleCloudSave(snapshot) {
 async function persistCloudState(snapshot, targetFamilyId = getActiveFamilyId(), scopeToken = getScopeToken(targetFamilyId)) {
   if (!neonClient || !currentUser || accessProfile?.status !== "active") return;
 
-  const normalizedSnapshot = linkStateProducts(structuredClone(snapshot));
-  let result;
+  const originalSnapshot = getCurrentStateSnapshot(snapshot);
+  let snapshotToSave = getCurrentStateSnapshot(snapshot);
+  let expectedUpdatedAt = lastSyncedCloudUpdatedAt;
+  let baseSnapshot = lastSyncedCloudState ? structuredClone(lastSyncedCloudState) : null;
+  let result = null;
 
-  if (targetFamilyId === null) {
-    result = await neonClient.rpc("save_scoped_app_state", {
-      app_state: normalizedSnapshot,
-      target_family_id: null,
-    });
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (targetFamilyId === null) {
+      result = await neonClient.rpc("save_scoped_app_state_if_fresh", {
+        app_state: snapshotToSave,
+        expected_updated_at: expectedUpdatedAt,
+        target_family_id: null,
+      });
 
-    if (result.error && isScopedStateRpcUnavailable(result.error)) {
-      result = await neonClient.rpc("save_app_state", {
-        app_state: normalizedSnapshot,
+      if (result.error && isConditionalSaveRpcUnavailable(result.error)) {
+        result = await neonClient.rpc("save_scoped_app_state", {
+          app_state: snapshotToSave,
+          target_family_id: null,
+        });
+      }
+
+      if (result.error && isScopedStateRpcUnavailable(result.error)) {
+        result = await neonClient.rpc("save_app_state", {
+          app_state: snapshotToSave,
+        });
+      }
+    } else {
+      result = await neonClient.rpc("save_scoped_app_state_if_fresh", {
+        app_state: snapshotToSave,
+        expected_updated_at: expectedUpdatedAt,
+        target_family_id: targetFamilyId,
+      });
+
+      if (result.error && isConditionalSaveRpcUnavailable(result.error)) {
+        result = await neonClient.rpc("save_scoped_app_state", {
+          app_state: snapshotToSave,
+          target_family_id: targetFamilyId,
+        });
+      }
+    }
+
+    if (targetFamilyId === null && result.error && isNormalizedCloudUnavailable(result.error)) {
+      result = await persistLegacyCloudState(snapshotToSave);
+    }
+
+    if (result.error || !result.data?.conflict) break;
+
+    const remoteSnapshot = result.data?.state ? getCurrentStateSnapshot(result.data.state) : null;
+    snapshotToSave = mergeSharedState(baseSnapshot || {}, snapshotToSave, remoteSnapshot || {});
+    baseSnapshot = remoteSnapshot ? structuredClone(remoteSnapshot) : null;
+    expectedUpdatedAt = result.data?.updated_at || null;
+  }
+
+  if (scopeToken !== getScopeToken()) return result;
+
+  if (!result.error) {
+    cloudStateExists = true;
+    hasPendingCloudChanges = false;
+    rememberCloudSnapshot(snapshotToSave, result.data?.updated_at || null);
+    updateSyncIndicator("synced");
+
+    if (
+      !areStatesEqual(snapshotToSave, originalSnapshot) &&
+      areStatesEqual(getCurrentStateSnapshot(), originalSnapshot)
+    ) {
+      applyStateSnapshot(snapshotToSave, {
+        preserveUi: true,
+        scheduleCloud: false,
+        markDirty: false,
       });
     }
   } else {
-    result = await neonClient.rpc("save_scoped_app_state", {
-      app_state: normalizedSnapshot,
-      target_family_id: targetFamilyId,
-    });
-  }
-
-  if (targetFamilyId === null && result.error && isNormalizedCloudUnavailable(result.error)) {
-    result = await persistLegacyCloudState(normalizedSnapshot);
-  }
-
-  if (scopeToken === getScopeToken()) {
-    if (!result.error) {
-      cloudStateExists = true;
-      updateSyncIndicator("synced");
-    } else {
-      updateSyncIndicator("offline");
-    }
+    updateSyncIndicator("offline");
   }
 
   return result;
@@ -293,6 +420,7 @@ async function loadCloudState(userId, targetFamilyId = getActiveFamilyId()) {
     const exists = Boolean(normalizedResult.data?.has_state);
     return {
       exists,
+      updatedAt: normalizedResult.data?.updated_at || null,
       state: exists ? normalizedResult.data?.state || null : null,
     };
   }
@@ -312,6 +440,7 @@ async function loadCloudState(userId, targetFamilyId = getActiveFamilyId()) {
   if (legacyResult.error) throw legacyResult.error;
   return {
     exists: Boolean(legacyResult.data?.[0]),
+    updatedAt: legacyResult.data?.[0]?.updated_at || null,
     state: legacyResult.data?.[0]?.state || null,
   };
 }
@@ -355,21 +484,27 @@ async function loadStateForCurrentScope({ seedSnapshot = null } = {}) {
   if (scopeToken !== getScopeToken(targetFamilyId)) return;
 
   cloudStateExists = cloudSaved.exists;
+  rememberCloudSnapshot(cloudSaved.state, cloudSaved.updatedAt);
+  hasPendingCloudChanges = false;
 
   const fallbackSaved = isPersonalScope(targetFamilyId) ? legacyUserLocalSaved || legacySaved || loadLegacyState() : null;
   const seededSnapshot = !cloudSaved.state && !scopedLocalSaved && !fallbackSaved && seedSnapshot ? structuredClone(seedSnapshot) : null;
   const saved = cloudSaved.state || scopedLocalSaved || fallbackSaved || seededSnapshot;
-
-  state = hydrateState(saved);
-  const hashView = window.location.hash.slice(1);
-  if (availableViews.includes(hashView)) {
-    state.activeView = hashView;
+  const initialView = window.location.hash.slice(1);
+  if (availableViews.includes(initialView)) {
+    state.activeView = initialView;
   }
-  syncMealDates();
-  syncIngredientAvailability();
-  render();
+  applyStateSnapshot(saved, {
+    preserveUi: true,
+    scheduleCloud: false,
+    markDirty: false,
+  });
 
   if (seededSnapshot) {
+    await persistCloudState(structuredClone(state), targetFamilyId, scopeToken);
+  }
+
+  if (!cloudSaved.exists && !seededSnapshot) {
     await persistCloudState(structuredClone(state), targetFamilyId, scopeToken);
   }
 
@@ -383,6 +518,71 @@ async function loadStateForCurrentScope({ seedSnapshot = null } = {}) {
       localStorage.removeItem(STORAGE_KEY);
     }
   }
+}
+
+async function syncCurrentScopeFromCloud(reason = "poll") {
+  if (!neonClient || !currentUser || accessProfile?.status !== "active") return;
+  if (document.hidden && reason === "interval") return;
+
+  const targetFamilyId = getActiveFamilyId();
+  const scopeToken = getScopeToken(targetFamilyId);
+  const remote = await loadCloudState(currentUser.id, targetFamilyId);
+
+  if (scopeToken !== getScopeToken(targetFamilyId)) return;
+  if (remote.updatedAt === lastSyncedCloudUpdatedAt) return;
+
+  const remoteSnapshot = remote.state || null;
+  const remoteSyncSnapshot = remoteSnapshot ? getCurrentStateSnapshot(remoteSnapshot) : null;
+  const currentSnapshot = getCurrentStateSnapshot();
+
+  if (!hasPendingCloudChanges) {
+    rememberCloudSnapshot(remoteSyncSnapshot, remote.updatedAt);
+    if (remoteSnapshot && !areStatesEqual(currentSnapshot, remoteSyncSnapshot)) {
+      applyStateSnapshot(remoteSnapshot, {
+        preserveUi: true,
+        scheduleCloud: false,
+        markDirty: false,
+      });
+      showToast("Оновлено зміни з сімейного простору");
+    }
+    return;
+  }
+
+  const mergedSnapshot = mergeSharedState(lastSyncedCloudState || {}, currentSnapshot, remoteSyncSnapshot || {});
+  rememberCloudSnapshot(remoteSyncSnapshot, remote.updatedAt);
+
+  if (!areStatesEqual(mergedSnapshot, currentSnapshot)) {
+    applyStateSnapshot(mergedSnapshot, {
+      preserveUi: true,
+      scheduleCloud: true,
+      markDirty: true,
+    });
+    showToast("Зміни злиті зі спільного простору");
+  } else {
+    scheduleCloudSave(currentSnapshot);
+  }
+}
+
+function requestCloudSync(reason = "manual") {
+  if (!neonClient || !currentUser || accessProfile?.status !== "active") return;
+
+  if (cloudSyncInFlight) {
+    cloudSyncQueued = true;
+    return;
+  }
+
+  cloudSyncInFlight = true;
+  syncCurrentScopeFromCloud(reason)
+    .catch(() => {
+      updateSyncIndicator("offline");
+    })
+    .finally(() => {
+      cloudSyncInFlight = false;
+      if (cloudSyncQueued) {
+        cloudSyncQueued = false;
+        requestCloudSync("queued");
+      }
+    });
 }
 
 function renderAuthScreen(message = "") {
@@ -458,10 +658,12 @@ function renderAccessScreen(profile, errorMessage = "") {
 
 async function signOut() {
   clearTimeout(cloudSaveTimer);
+  stopCloudSyncLoop();
   await neonClient?.auth.signOut();
   currentUser = null;
   accessProfile = null;
   setFamilyContext();
+  clearCloudSnapshot();
   cloudStateExists = false;
   authFormMode = "sign-in";
   renderAuthScreen();
@@ -2077,6 +2279,8 @@ async function bootstrap() {
   try {
     const localMode = new URLSearchParams(window.location.search).has("local");
     if (!neonConfigured) {
+      stopCloudSyncLoop();
+      clearCloudSnapshot();
       if (!localMode) {
         renderConfigurationScreen();
         return;
@@ -2100,6 +2304,8 @@ async function bootstrap() {
     const sessionResult = await neonClient.auth.getSession();
     const user = getSessionUser(sessionResult);
     if (!user) {
+      stopCloudSyncLoop();
+      clearCloudSnapshot();
       currentUser = null;
       accessProfile = null;
       setFamilyContext();
@@ -2110,6 +2316,8 @@ async function bootstrap() {
     currentUser = user;
     accessProfile = await getAccessProfile(user);
     if (!accessProfile || accessProfile.status !== "active") {
+      stopCloudSyncLoop();
+      clearCloudSnapshot();
       setFamilyContext();
       renderAccessScreen(accessProfile || { status: "pending" });
       return;
@@ -2118,6 +2326,7 @@ async function bootstrap() {
     await ensureCloudStateMigrated();
     await refreshFamilyContext();
     await loadStateForCurrentScope();
+    startCloudSyncLoop();
   } catch (error) {
     if (currentUser) {
       renderAccessScreen(accessProfile || { status: "pending" }, error?.message || "Не вдалося перевірити доступ");
@@ -2147,6 +2356,11 @@ window.addEventListener("hashchange", () => {
     state.activeView = view;
     render();
   }
+});
+window.addEventListener("focus", () => requestCloudSync("focus"));
+window.addEventListener("online", () => requestCloudSync("online"));
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) requestCloudSync("visibility");
 });
 
 if ("serviceWorker" in navigator) {

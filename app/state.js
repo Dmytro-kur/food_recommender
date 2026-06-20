@@ -14,6 +14,153 @@ export function normalizeProductId(value) {
   return Number.isInteger(numeric) ? numeric : null;
 }
 
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isEntityArray(value) {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every((item) => isPlainObject(item) && Object.hasOwn(item, "id"))
+  );
+}
+
+function canonicalizeValue(value) {
+  if (Array.isArray(value)) return value.map(canonicalizeValue);
+  if (!isPlainObject(value)) return value;
+
+  return Object.keys(value)
+    .sort()
+    .reduce((result, key) => {
+      if (value[key] !== undefined) {
+        result[key] = canonicalizeValue(value[key]);
+      }
+      return result;
+    }, {});
+}
+
+function cloneValue(value) {
+  return value === undefined ? undefined : structuredClone(value);
+}
+
+function mergeScalarValue(baseValue, localValue, remoteValue) {
+  const localChanged = !areStatesEqual(localValue, baseValue);
+  const remoteChanged = !areStatesEqual(remoteValue, baseValue);
+
+  if (localChanged && !remoteChanged) return cloneValue(localValue);
+  if (!localChanged && remoteChanged) return cloneValue(remoteValue);
+  if (localChanged && remoteChanged) return cloneValue(localValue);
+
+  if (remoteValue !== undefined) return cloneValue(remoteValue);
+  if (localValue !== undefined) return cloneValue(localValue);
+  return cloneValue(baseValue);
+}
+
+function mergeObjectValue(baseValue, localValue, remoteValue) {
+  const keys = new Set([
+    ...Object.keys(baseValue || {}),
+    ...Object.keys(localValue || {}),
+    ...Object.keys(remoteValue || {}),
+  ]);
+  const merged = {};
+
+  keys.forEach((key) => {
+    const nextValue = mergeStateValue(baseValue?.[key], localValue?.[key], remoteValue?.[key]);
+    if (nextValue !== undefined) {
+      merged[key] = nextValue;
+    }
+  });
+
+  return merged;
+}
+
+function mergeEntityRecord(baseValue, localValue, remoteValue) {
+  const merged = mergeObjectValue(baseValue, localValue, remoteValue);
+  merged.id = localValue?.id ?? remoteValue?.id ?? baseValue?.id;
+  return merged;
+}
+
+function mergeEntityArray(baseValue = [], localValue = [], remoteValue = []) {
+  const baseMap = new Map(baseValue.map((item) => [item.id, item]));
+  const localMap = new Map(localValue.map((item) => [item.id, item]));
+  const remoteMap = new Map(remoteValue.map((item) => [item.id, item]));
+  const mergedMap = new Map();
+  const allIds = new Set([...baseMap.keys(), ...localMap.keys(), ...remoteMap.keys()]);
+
+  allIds.forEach((id) => {
+    const baseItem = baseMap.get(id);
+    const localItem = localMap.get(id);
+    const remoteItem = remoteMap.get(id);
+
+    if (!baseItem) {
+      if (localItem && remoteItem) {
+        mergedMap.set(id, mergeEntityRecord({}, localItem, remoteItem));
+      } else if (localItem) {
+        mergedMap.set(id, cloneValue(localItem));
+      } else if (remoteItem) {
+        mergedMap.set(id, cloneValue(remoteItem));
+      }
+      return;
+    }
+
+    const localDeleted = !localItem;
+    const remoteDeleted = !remoteItem;
+    const localChanged = localItem ? !areStatesEqual(localItem, baseItem) : false;
+    const remoteChanged = remoteItem ? !areStatesEqual(remoteItem, baseItem) : false;
+
+    if (localDeleted && remoteDeleted) return;
+    if (localDeleted && !remoteChanged) return;
+    if (remoteDeleted && !localChanged) return;
+    if (localDeleted && remoteChanged) {
+      mergedMap.set(id, cloneValue(remoteItem));
+      return;
+    }
+    if (remoteDeleted && localChanged) {
+      mergedMap.set(id, cloneValue(localItem));
+      return;
+    }
+
+    mergedMap.set(id, mergeEntityRecord(baseItem, localItem, remoteItem));
+  });
+
+  const orderedIds = [];
+  const seen = new Set();
+  const pushIds = (items) => {
+    items.forEach((item) => {
+      if (!item || seen.has(item.id) || !mergedMap.has(item.id)) return;
+      seen.add(item.id);
+      orderedIds.push(item.id);
+    });
+  };
+
+  pushIds(localValue);
+  pushIds(remoteValue);
+  pushIds(baseValue);
+  mergedMap.forEach((_, id) => {
+    if (!seen.has(id)) orderedIds.push(id);
+  });
+
+  return orderedIds.map((id) => mergedMap.get(id));
+}
+
+function mergeStateValue(baseValue, localValue, remoteValue) {
+  const treatAsEntityArray = isEntityArray(baseValue) || isEntityArray(localValue) || isEntityArray(remoteValue);
+  if (treatAsEntityArray) {
+    return mergeEntityArray(baseValue || [], localValue || [], remoteValue || []);
+  }
+
+  if (isPlainObject(baseValue) || isPlainObject(localValue) || isPlainObject(remoteValue)) {
+    return mergeObjectValue(baseValue || {}, localValue || {}, remoteValue || {});
+  }
+
+  if (Array.isArray(baseValue) || Array.isArray(localValue) || Array.isArray(remoteValue)) {
+    return mergeScalarValue(baseValue || [], localValue || [], remoteValue || []);
+  }
+
+  return mergeScalarValue(baseValue, localValue, remoteValue);
+}
+
 export function findCatalogProduct(target, catalog = []) {
   const productId = normalizeProductId(typeof target === "object" ? target?.productId : null);
   if (productId !== null) {
@@ -131,6 +278,25 @@ export function hydrateState(saved) {
   hydrated.recipeCatalog = hydrated.recipeCatalog.map(normalizeMeal);
   hydrated.selectedDay = Math.min(Math.max(Number(hydrated.selectedDay) || 0, 0), Math.max(hydrated.meals.length - 1, 0));
   return linkStateProducts(hydrated);
+}
+
+export function serializeStateSnapshot(snapshot) {
+  return JSON.stringify(canonicalizeValue(snapshot));
+}
+
+export function areStatesEqual(left, right) {
+  return serializeStateSnapshot(left) === serializeStateSnapshot(right);
+}
+
+export function mergeSharedState(baseState, localState, remoteState) {
+  const merged = mergeStateValue(baseState || {}, localState || {}, remoteState || {}) || {};
+  if (localState?.activeView) {
+    merged.activeView = localState.activeView;
+  }
+  if (Number.isFinite(localState?.selectedDay)) {
+    merged.selectedDay = localState.selectedDay;
+  }
+  return linkStateProducts(merged);
 }
 
 export function remainingItems(state) {

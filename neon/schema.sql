@@ -1203,6 +1203,59 @@ AS $$
   SELECT public.load_scoped_app_state(-1);
 $$;
 
+CREATE OR REPLACE FUNCTION public.save_scoped_app_state_if_fresh(
+  app_state jsonb,
+  expected_updated_at timestamptz DEFAULT NULL,
+  target_family_id bigint DEFAULT -1
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_owner_id text;
+  v_current_updated_at timestamptz;
+  v_save_result jsonb;
+  v_remote_state jsonb;
+BEGIN
+  IF auth.user_id() IS NULL THEN
+    RAISE EXCEPTION 'Authentication required';
+  END IF;
+
+  IF NOT public.has_app_access() THEN
+    RAISE EXCEPTION 'App access denied for the current user';
+  END IF;
+
+  v_owner_id := public.resolve_state_owner_id(target_family_id);
+
+  SELECT updated_at
+  INTO v_current_updated_at
+  FROM public.user_state_meta
+  WHERE owner_id = v_owner_id;
+
+  IF v_current_updated_at IS DISTINCT FROM expected_updated_at THEN
+    v_remote_state := public.load_scoped_app_state(target_family_id) -> 'state';
+
+    RETURN jsonb_build_object(
+      'saved', false,
+      'conflict', true,
+      'updated_at', v_current_updated_at,
+      'state', COALESCE(v_remote_state, '{}'::jsonb)
+    );
+  END IF;
+
+  v_save_result := public.save_scoped_app_state(app_state, target_family_id);
+
+  RETURN jsonb_build_object(
+    'saved', true,
+    'conflict', false,
+    'updated_at', v_save_result ->> 'updated_at',
+    'state', app_state
+  );
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION public.migrate_legacy_user_state()
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -1263,6 +1316,7 @@ REVOKE ALL ON FUNCTION public.remove_family_group_member(bigint, text) FROM PUBL
 REVOKE ALL ON FUNCTION public.normalize_entity_name(text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.save_app_state(jsonb) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.save_scoped_app_state(jsonb, bigint) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.save_scoped_app_state_if_fresh(jsonb, timestamptz, bigint) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.load_app_state() FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.load_scoped_app_state(bigint) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.migrate_legacy_user_state() FROM PUBLIC;
@@ -1281,6 +1335,7 @@ GRANT EXECUTE ON FUNCTION public.add_family_group_member(bigint, text) TO authen
 GRANT EXECUTE ON FUNCTION public.remove_family_group_member(bigint, text) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.save_app_state(jsonb) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.save_scoped_app_state(jsonb, bigint) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.save_scoped_app_state_if_fresh(jsonb, timestamptz, bigint) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.load_app_state() TO authenticated;
 GRANT EXECUTE ON FUNCTION public.load_scoped_app_state(bigint) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.migrate_legacy_user_state() TO authenticated;
