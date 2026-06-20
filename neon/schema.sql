@@ -36,6 +36,38 @@ CREATE TABLE IF NOT EXISTS public.app_users (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS public.family_groups (
+  family_id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  family_name text NOT NULL,
+  created_by text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS public.family_group_memberships (
+  family_id bigint NOT NULL
+    REFERENCES public.family_groups(family_id)
+    ON DELETE CASCADE,
+  user_id text NOT NULL
+    REFERENCES public.app_users(user_id)
+    ON DELETE CASCADE,
+  membership_role text NOT NULL DEFAULT 'member' CHECK (membership_role IN ('owner', 'member')),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (family_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS public.user_preferences (
+  user_id text PRIMARY KEY
+    REFERENCES public.app_users(user_id)
+    ON DELETE CASCADE,
+  active_family_id bigint
+    REFERENCES public.family_groups(family_id)
+    ON DELETE SET NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
 -- Legacy snapshot table kept only for one-time migration to the normalized model.
 CREATE TABLE IF NOT EXISTS public.user_state (
   owner_id text PRIMARY KEY DEFAULT (auth.user_id()),
@@ -206,6 +238,90 @@ AS $$
   );
 $$;
 
+CREATE OR REPLACE FUNCTION public.current_active_family_id()
+RETURNS bigint
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+  SELECT prefs.active_family_id
+  FROM public.user_preferences AS prefs
+  JOIN public.family_group_memberships AS membership
+    ON membership.family_id = prefs.active_family_id
+   AND membership.user_id = auth.user_id()
+  WHERE prefs.user_id = auth.user_id()
+  LIMIT 1;
+$$;
+
+CREATE OR REPLACE FUNCTION public.is_family_group_member(target_family_id bigint)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+  SELECT EXISTS (
+    SELECT 1
+    FROM public.family_group_memberships
+    WHERE family_id = target_family_id
+      AND user_id = auth.user_id()
+  );
+$$;
+
+CREATE OR REPLACE FUNCTION public.can_manage_family_group(target_family_id bigint)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+  SELECT EXISTS (
+    SELECT 1
+    FROM public.family_group_memberships
+    WHERE family_id = target_family_id
+      AND user_id = auth.user_id()
+      AND membership_role = 'owner'
+  );
+$$;
+
+CREATE OR REPLACE FUNCTION public.resolve_state_owner_id(target_family_id bigint DEFAULT -1)
+RETURNS text
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_user_id text := auth.user_id();
+  v_family_id bigint;
+BEGIN
+  IF v_user_id IS NULL THEN
+    RAISE EXCEPTION 'Authentication required';
+  END IF;
+
+  IF target_family_id IS NULL THEN
+    RETURN v_user_id;
+  END IF;
+
+  v_family_id :=
+    CASE
+      WHEN target_family_id < 0 THEN public.current_active_family_id()
+      ELSE target_family_id
+    END;
+
+  IF v_family_id IS NULL THEN
+    RETURN v_user_id;
+  END IF;
+
+  IF NOT public.is_family_group_member(v_family_id) THEN
+    RAISE EXCEPTION 'Family access denied for the current user';
+  END IF;
+
+  RETURN 'family:' || v_family_id::text;
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION public.list_app_users()
 RETURNS TABLE (
   user_id text,
@@ -233,6 +349,353 @@ AS $$
   ORDER BY access.created_at DESC;
 $$;
 
+CREATE OR REPLACE FUNCTION public.list_family_groups()
+RETURNS TABLE (
+  family_id bigint,
+  family_name text,
+  membership_role text,
+  is_active boolean,
+  member_count bigint,
+  created_at timestamptz,
+  updated_at timestamptz
+)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+  SELECT
+    grp.family_id,
+    grp.family_name,
+    membership.membership_role,
+    grp.family_id = public.current_active_family_id(),
+    (
+      SELECT COUNT(*)::bigint
+      FROM public.family_group_memberships AS member_count
+      WHERE member_count.family_id = grp.family_id
+    ) AS member_count,
+    grp.created_at,
+    grp.updated_at
+  FROM public.family_group_memberships AS membership
+  JOIN public.family_groups AS grp ON grp.family_id = membership.family_id
+  WHERE membership.user_id = auth.user_id()
+    AND public.has_app_access()
+  ORDER BY
+    (grp.family_id = public.current_active_family_id()) DESC,
+    grp.updated_at DESC,
+    grp.family_id DESC;
+$$;
+
+CREATE OR REPLACE FUNCTION public.create_family_group(group_name text)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_group_name text := NULLIF(BTRIM(group_name), '');
+  v_family_id bigint;
+  v_now timestamptz := now();
+BEGIN
+  IF auth.user_id() IS NULL THEN
+    RAISE EXCEPTION 'Authentication required';
+  END IF;
+
+  IF NOT public.has_app_access() THEN
+    RAISE EXCEPTION 'App access denied for the current user';
+  END IF;
+
+  IF v_group_name IS NULL THEN
+    RAISE EXCEPTION 'Family group name is required';
+  END IF;
+
+  INSERT INTO public.family_groups (
+    family_name,
+    created_by,
+    created_at,
+    updated_at
+  )
+  VALUES (
+    v_group_name,
+    auth.user_id(),
+    v_now,
+    v_now
+  )
+  RETURNING family_id INTO v_family_id;
+
+  INSERT INTO public.family_group_memberships (
+    family_id,
+    user_id,
+    membership_role,
+    created_at,
+    updated_at
+  )
+  VALUES (
+    v_family_id,
+    auth.user_id(),
+    'owner',
+    v_now,
+    v_now
+  );
+
+  INSERT INTO public.user_preferences (
+    user_id,
+    active_family_id,
+    updated_at
+  )
+  VALUES (
+    auth.user_id(),
+    v_family_id,
+    v_now
+  )
+  ON CONFLICT (user_id) DO UPDATE
+    SET active_family_id = EXCLUDED.active_family_id,
+        updated_at = EXCLUDED.updated_at;
+
+  RETURN jsonb_build_object(
+    'family_id', v_family_id,
+    'family_name', v_group_name,
+    'membership_role', 'owner',
+    'is_active', true
+  );
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.set_active_family_group(target_family_id bigint DEFAULT NULL)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_now timestamptz := now();
+BEGIN
+  IF auth.user_id() IS NULL THEN
+    RAISE EXCEPTION 'Authentication required';
+  END IF;
+
+  IF NOT public.has_app_access() THEN
+    RAISE EXCEPTION 'App access denied for the current user';
+  END IF;
+
+  IF target_family_id IS NOT NULL AND NOT public.is_family_group_member(target_family_id) THEN
+    RAISE EXCEPTION 'Family access denied for the current user';
+  END IF;
+
+  INSERT INTO public.user_preferences (
+    user_id,
+    active_family_id,
+    updated_at
+  )
+  VALUES (
+    auth.user_id(),
+    target_family_id,
+    v_now
+  )
+  ON CONFLICT (user_id) DO UPDATE
+    SET active_family_id = EXCLUDED.active_family_id,
+        updated_at = EXCLUDED.updated_at;
+
+  RETURN jsonb_build_object(
+    'active_family_id', target_family_id,
+    'scope_owner_id', public.resolve_state_owner_id(
+      CASE
+        WHEN target_family_id IS NULL THEN NULL
+        ELSE target_family_id
+      END
+    )
+  );
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.list_family_group_members(target_family_id bigint DEFAULT NULL)
+RETURNS TABLE (
+  family_id bigint,
+  user_id text,
+  email text,
+  display_name text,
+  membership_role text,
+  is_current_user boolean,
+  joined_at timestamptz
+)
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_family_id bigint := COALESCE(target_family_id, public.current_active_family_id());
+BEGIN
+  IF auth.user_id() IS NULL THEN
+    RAISE EXCEPTION 'Authentication required';
+  END IF;
+
+  IF NOT public.has_app_access() THEN
+    RAISE EXCEPTION 'App access denied for the current user';
+  END IF;
+
+  IF v_family_id IS NULL THEN
+    RETURN;
+  END IF;
+
+  IF NOT public.is_family_group_member(v_family_id) THEN
+    RAISE EXCEPTION 'Family access denied for the current user';
+  END IF;
+
+  RETURN QUERY
+  SELECT
+    membership.family_id,
+    membership.user_id,
+    auth_user.email,
+    COALESCE(auth_user.name, auth_user.email),
+    membership.membership_role,
+    membership.user_id = auth.user_id(),
+    membership.created_at
+  FROM public.family_group_memberships AS membership
+  JOIN neon_auth.user AS auth_user ON auth_user.id::text = membership.user_id
+  WHERE membership.family_id = v_family_id
+  ORDER BY
+    CASE WHEN membership.membership_role = 'owner' THEN 0 ELSE 1 END,
+    membership.created_at,
+    membership.user_id;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.add_family_group_member(target_family_id bigint, member_email text)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_email text := NULLIF(BTRIM(member_email), '');
+  v_member_user_id text;
+  v_now timestamptz := now();
+BEGIN
+  IF auth.user_id() IS NULL THEN
+    RAISE EXCEPTION 'Authentication required';
+  END IF;
+
+  IF NOT public.has_app_access() THEN
+    RAISE EXCEPTION 'App access denied for the current user';
+  END IF;
+
+  IF target_family_id IS NULL THEN
+    RAISE EXCEPTION 'Family group is required';
+  END IF;
+
+  IF NOT public.can_manage_family_group(target_family_id) THEN
+    RAISE EXCEPTION 'Only family owners can manage members';
+  END IF;
+
+  IF v_email IS NULL THEN
+    RAISE EXCEPTION 'Member email is required';
+  END IF;
+
+  SELECT auth_user.id::text
+  INTO v_member_user_id
+  FROM neon_auth.user AS auth_user
+  JOIN public.app_users AS access
+    ON access.user_id = auth_user.id::text
+  WHERE lower(auth_user.email) = lower(v_email)
+    AND access.status = 'active'
+  LIMIT 1;
+
+  IF v_member_user_id IS NULL THEN
+    RAISE EXCEPTION 'The member must sign up and receive active app access first';
+  END IF;
+
+  INSERT INTO public.family_group_memberships (
+    family_id,
+    user_id,
+    membership_role,
+    created_at,
+    updated_at
+  )
+  VALUES (
+    target_family_id,
+    v_member_user_id,
+    'member',
+    v_now,
+    v_now
+  )
+  ON CONFLICT (family_id, user_id) DO UPDATE
+    SET updated_at = EXCLUDED.updated_at;
+
+  UPDATE public.family_groups
+  SET updated_at = v_now
+  WHERE family_id = target_family_id;
+
+  RETURN jsonb_build_object(
+    'family_id', target_family_id,
+    'user_id', v_member_user_id,
+    'added', true
+  );
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.remove_family_group_member(target_family_id bigint, member_user_id text)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_role text;
+  v_now timestamptz := now();
+BEGIN
+  IF auth.user_id() IS NULL THEN
+    RAISE EXCEPTION 'Authentication required';
+  END IF;
+
+  IF NOT public.has_app_access() THEN
+    RAISE EXCEPTION 'App access denied for the current user';
+  END IF;
+
+  IF target_family_id IS NULL THEN
+    RAISE EXCEPTION 'Family group is required';
+  END IF;
+
+  IF NOT public.can_manage_family_group(target_family_id) THEN
+    RAISE EXCEPTION 'Only family owners can manage members';
+  END IF;
+
+  SELECT membership_role
+  INTO v_role
+  FROM public.family_group_memberships
+  WHERE family_id = target_family_id
+    AND user_id = member_user_id;
+
+  IF v_role IS NULL THEN
+    RAISE EXCEPTION 'Family member not found';
+  END IF;
+
+  IF v_role = 'owner' THEN
+    RAISE EXCEPTION 'The family owner cannot be removed';
+  END IF;
+
+  DELETE FROM public.family_group_memberships
+  WHERE family_id = target_family_id
+    AND user_id = member_user_id;
+
+  UPDATE public.user_preferences
+  SET active_family_id = NULL,
+      updated_at = v_now
+  WHERE user_id = member_user_id
+    AND active_family_id = target_family_id;
+
+  UPDATE public.family_groups
+  SET updated_at = v_now
+  WHERE family_id = target_family_id;
+
+  RETURN jsonb_build_object(
+    'family_id', target_family_id,
+    'user_id', member_user_id,
+    'removed', true
+  );
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION public.normalize_entity_name(value text)
 RETURNS text
 LANGUAGE sql
@@ -249,23 +712,25 @@ AS $$
   );
 $$;
 
-CREATE OR REPLACE FUNCTION public.save_app_state(app_state jsonb)
+CREATE OR REPLACE FUNCTION public.save_scoped_app_state(app_state jsonb, target_family_id bigint DEFAULT -1)
 RETURNS jsonb
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = ''
 AS $$
 DECLARE
-  v_owner_id text := auth.user_id();
+  v_owner_id text;
   v_now timestamptz := now();
 BEGIN
-  IF v_owner_id IS NULL THEN
+  IF auth.user_id() IS NULL THEN
     RAISE EXCEPTION 'Authentication required';
   END IF;
 
   IF NOT public.has_app_access() THEN
     RAISE EXCEPTION 'App access denied for the current user';
   END IF;
+
+  v_owner_id := public.resolve_state_owner_id(target_family_id);
 
   INSERT INTO public.user_state_meta (
     owner_id,
@@ -540,24 +1005,35 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION public.load_app_state()
+CREATE OR REPLACE FUNCTION public.save_app_state(app_state jsonb)
+RETURNS jsonb
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+  SELECT public.save_scoped_app_state(app_state, -1);
+$$;
+
+CREATE OR REPLACE FUNCTION public.load_scoped_app_state(target_family_id bigint DEFAULT -1)
 RETURNS jsonb
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = ''
 AS $$
 DECLARE
-  v_owner_id text := auth.user_id();
+  v_owner_id text;
   v_has_state boolean;
   v_state jsonb;
 BEGIN
-  IF v_owner_id IS NULL THEN
+  IF auth.user_id() IS NULL THEN
     RAISE EXCEPTION 'Authentication required';
   END IF;
 
   IF NOT public.has_app_access() THEN
     RAISE EXCEPTION 'App access denied for the current user';
   END IF;
+
+  v_owner_id := public.resolve_state_owner_id(target_family_id);
 
   SELECT EXISTS (
     SELECT 1
@@ -718,6 +1194,15 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION public.load_app_state()
+RETURNS jsonb
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+  SELECT public.load_scoped_app_state(-1);
+$$;
+
 CREATE OR REPLACE FUNCTION public.migrate_legacy_user_state()
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -757,26 +1242,53 @@ BEGIN
     RETURN jsonb_build_object('migrated', false, 'reason', 'no_legacy_state');
   END IF;
 
-  PERFORM public.save_app_state(v_legacy_state);
+  PERFORM public.save_scoped_app_state(v_legacy_state, NULL);
   RETURN jsonb_build_object('migrated', true);
 END;
 $$;
 
 REVOKE ALL ON FUNCTION public.is_app_admin() FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.has_app_access() FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.current_active_family_id() FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.is_family_group_member(bigint) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.can_manage_family_group(bigint) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.resolve_state_owner_id(bigint) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.list_app_users() FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.list_family_groups() FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.create_family_group(text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.set_active_family_group(bigint) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.list_family_group_members(bigint) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.add_family_group_member(bigint, text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.remove_family_group_member(bigint, text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.normalize_entity_name(text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.save_app_state(jsonb) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.save_scoped_app_state(jsonb, bigint) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.load_app_state() FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.load_scoped_app_state(bigint) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.migrate_legacy_user_state() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.is_app_admin() TO authenticated;
 GRANT EXECUTE ON FUNCTION public.has_app_access() TO authenticated;
+GRANT EXECUTE ON FUNCTION public.current_active_family_id() TO authenticated;
+GRANT EXECUTE ON FUNCTION public.is_family_group_member(bigint) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.can_manage_family_group(bigint) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.resolve_state_owner_id(bigint) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.list_app_users() TO authenticated;
+GRANT EXECUTE ON FUNCTION public.list_family_groups() TO authenticated;
+GRANT EXECUTE ON FUNCTION public.create_family_group(text) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.set_active_family_group(bigint) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.list_family_group_members(bigint) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.add_family_group_member(bigint, text) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.remove_family_group_member(bigint, text) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.save_app_state(jsonb) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.save_scoped_app_state(jsonb, bigint) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.load_app_state() TO authenticated;
+GRANT EXECUTE ON FUNCTION public.load_scoped_app_state(bigint) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.migrate_legacy_user_state() TO authenticated;
 
 ALTER TABLE public.app_users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.family_groups ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.family_group_memberships ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.user_preferences ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.user_state ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.user_state_meta ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.user_products ENABLE ROW LEVEL SECURITY;
@@ -824,6 +1336,54 @@ ON public.app_users
 FOR DELETE
 TO authenticated
 USING (public.is_app_admin());
+
+DROP POLICY IF EXISTS family_groups_select_member ON public.family_groups;
+CREATE POLICY family_groups_select_member
+ON public.family_groups
+FOR SELECT
+TO authenticated
+USING (
+  public.is_family_group_member(public.family_groups.family_id)
+);
+
+DROP POLICY IF EXISTS family_group_memberships_select_member ON public.family_group_memberships;
+CREATE POLICY family_group_memberships_select_member
+ON public.family_group_memberships
+FOR SELECT
+TO authenticated
+USING (
+  public.is_family_group_member(public.family_group_memberships.family_id)
+);
+
+DROP POLICY IF EXISTS user_preferences_select_self ON public.user_preferences;
+CREATE POLICY user_preferences_select_self
+ON public.user_preferences
+FOR SELECT
+TO authenticated
+USING (
+  user_id = auth.user_id()
+);
+
+DROP POLICY IF EXISTS user_preferences_insert_self ON public.user_preferences;
+CREATE POLICY user_preferences_insert_self
+ON public.user_preferences
+FOR INSERT
+TO authenticated
+WITH CHECK (
+  user_id = auth.user_id()
+);
+
+DROP POLICY IF EXISTS user_preferences_update_self ON public.user_preferences;
+CREATE POLICY user_preferences_update_self
+ON public.user_preferences
+FOR UPDATE
+TO authenticated
+USING (
+  user_id = auth.user_id()
+)
+WITH CHECK (
+  user_id = auth.user_id()
+);
 
 DROP POLICY IF EXISTS user_state_select_own ON public.user_state;
 CREATE POLICY user_state_select_own

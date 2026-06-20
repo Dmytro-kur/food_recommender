@@ -17,6 +17,8 @@ Mobile-first PWA для планування недорогого меню, ко
 - дешевші заміни для страв, якщо чогось немає;
 - email/password-авторизація через Neon Auth;
 - ролі `admin/user` та доступи `pending/active/blocked`;
+- сімейні групи зі спільним доступом до меню, рецептів, запасів і списку покупок;
+- перемикання між особистим простором і сімейним простором без втрати локального кешу;
 - синхронізація даних через Neon Data API з нормалізованими таблицями та автоматичною міграцією з legacy JSON-стану;
 - локальний IndexedDB-кеш на випадок короткого розриву з’єднання;
 - встановлення на домашній екран як окремої мобільної апки.
@@ -50,9 +52,10 @@ http://localhost:5173/?local=1
 5. Скопіюйте `Data API URL`.
 6. У `SQL Editor` виконайте файл [`neon/schema.sql`](neon/schema.sql).
 7. На сторінці Data API натисніть `Refresh schema cache`.
-8. Якщо оновлюєте існуючу інсталяцію, після деплою перший вхід користувача автоматично перенесе дані з legacy `user_state` у нові таблиці.
-9. У `Auth → Configuration → Domains` додайте адресу GitHub Pages без кінцевого `/`.
-10. У `Data API → Settings → CORS allowed origins` додайте ту саму адресу.
+8. Якщо оновлюєте існуючу інсталяцію, повторно виконайте [`neon/schema.sql`](neon/schema.sql): файл ідемпотентний і додасть таблиці та RPC для сімейних груп.
+9. Після деплою перший вхід користувача автоматично перенесе дані з legacy `user_state` у нові таблиці.
+10. У `Auth → Configuration → Domains` додайте адресу GitHub Pages без кінцевого `/`.
+11. У `Data API → Settings → CORS allowed origins` додайте ту саму адресу.
 
 Якщо SQL Editor показує `schema "auth" does not exist`, Data API не підключена до Neon Auth для вибраної branch/database. У `Data API → Settings → Authentication` має бути вказано `Neon Auth`. Якщо провайдера немає, додайте його або переввімкніть Data API з опцією `Use Neon Auth`.
 
@@ -87,11 +90,13 @@ WHERE user_id = (
 
 ## Дані та доступ
 
-Neon Auth зберігає акаунти. Таблиця `app_users` містить роль і статус доступу. Основний стан тепер зберігається в нормалізованих таблицях: `user_state_meta`, `user_products`, `user_recipe_catalog`, `user_planned_meals`, `user_pantry_items` і `user_shopping_items` плюс дочірні таблиці для інгредієнтів і кроків.
+Neon Auth зберігає акаунти. Таблиця `app_users` містить роль і статус доступу. Для сімейних просторів використовуються `family_groups`, `family_group_memberships` і `user_preferences`: членство в групі дає доступ до всіх спільних меню, рецептів, запасів і покупок цієї сім’ї.
 
-Клієнт працює не напряму з цими таблицями, а через RPC-функції `save_app_state`, `load_app_state` та `migrate_legacy_user_state`. Це дозволяє робити повну синхронізацію одним викликом і тримати legacy `user_state` лише як джерело для одноразової міграції.
+Основний стан зберігається в нормалізованих таблицях `user_state_meta`, `user_products`, `user_recipe_catalog`, `user_planned_meals`, `user_pantry_items` і `user_shopping_items` плюс дочірні таблиці для інгредієнтів і кроків. Поле `owner_id` у цих таблицях тепер означає не лише користувача, а й активний простір: або персональний, або сімейний.
 
-PostgreSQL Row-Level Security і перевірка `auth.user_id()` обмежують прямий доступ до `app_users` та legacy-таблиці `user_state`. Для нових таблиць увімкнено RLS, а запис і читання виконуються через `SECURITY DEFINER` функції тільки для користувачів зі статусом `active`.
+Клієнт працює не напряму з цими таблицями, а через RPC-функції `save_scoped_app_state`, `load_scoped_app_state`, `create_family_group`, `set_active_family_group`, `list_family_groups`, `list_family_group_members` і `migrate_legacy_user_state`. Старі `save_app_state` та `load_app_state` лишилися як сумісні wrapper-и.
+
+PostgreSQL Row-Level Security і перевірка `auth.user_id()` обмежують прямий доступ до `app_users`, таблиць сімейних груп і legacy-таблиці `user_state`. Для нових таблиць увімкнено RLS, а запис і читання виконуються через `SECURITY DEFINER` функції тільки для користувачів зі статусом `active`.
 
 ## CI/CD через GitHub Pages
 

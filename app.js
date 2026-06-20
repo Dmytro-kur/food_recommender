@@ -35,6 +35,8 @@ let saveTimer;
 let cloudSaveTimer;
 let currentUser = null;
 let accessProfile = null;
+let familyGroups = [];
+let activeFamilyGroup = null;
 let cloudStateExists = false;
 let authFormMode = "sign-in";
 let isBootstrapping = false;
@@ -87,7 +89,67 @@ function syncMealDates() {
 
 function isNormalizedCloudUnavailable(error) {
   const message = String(error?.message || "");
-  return message.includes("load_app_state") || message.includes("save_app_state") || message.includes("migrate_legacy_user_state");
+  return (
+    message.includes("load_scoped_app_state") ||
+    message.includes("save_scoped_app_state") ||
+    message.includes("load_app_state") ||
+    message.includes("save_app_state") ||
+    message.includes("migrate_legacy_user_state")
+  );
+}
+
+function isScopedStateRpcUnavailable(error) {
+  const message = String(error?.message || "");
+  return message.includes("load_scoped_app_state") || message.includes("save_scoped_app_state");
+}
+
+function isFamilyGroupsUnavailable(error) {
+  const message = String(error?.message || "");
+  return (
+    message.includes("list_family_groups") ||
+    message.includes("create_family_group") ||
+    message.includes("set_active_family_group") ||
+    message.includes("list_family_group_members") ||
+    message.includes("add_family_group_member") ||
+    message.includes("remove_family_group_member")
+  );
+}
+
+function getActiveFamilyId() {
+  const numeric = Number(activeFamilyGroup?.family_id);
+  return Number.isInteger(numeric) ? numeric : null;
+}
+
+function isPersonalScope(targetFamilyId = getActiveFamilyId()) {
+  return targetFamilyId === null;
+}
+
+function getScopeToken(targetFamilyId = getActiveFamilyId()) {
+  if (!currentUser) return "local";
+  return targetFamilyId === null ? `personal:${currentUser.id}` : `family:${targetFamilyId}`;
+}
+
+function getScopedLocalStateKey(userId = currentUser?.id, targetFamilyId = getActiveFamilyId()) {
+  if (!userId) return LOCAL_DB_STATE_KEY;
+  return `${LOCAL_DB_STATE_KEY}:${userId}:${targetFamilyId === null ? "personal" : `family-${targetFamilyId}`}`;
+}
+
+function getCurrentScopeLabel() {
+  return activeFamilyGroup?.family_name || "Особистий простір";
+}
+
+function getFamilyGroupsErrorMessage(error, fallback) {
+  return isFamilyGroupsUnavailable(error) ? "Онови neon/schema.sql у Neon Console" : error?.message || fallback;
+}
+
+function getSyncIndicatorLabel(status = "synced") {
+  if (!currentUser) return "Локальний режим";
+  return status === "offline" ? `${getCurrentScopeLabel()} · офлайн-копія` : `${getCurrentScopeLabel()} · синхронізовано`;
+}
+
+function setFamilyContext(groups = []) {
+  familyGroups = Array.isArray(groups) ? groups : [];
+  activeFamilyGroup = familyGroups.find((group) => group.is_active) || null;
 }
 
 function loadLegacyState() {
@@ -102,7 +164,7 @@ function loadLegacyState() {
 function saveState() {
   clearTimeout(saveTimer);
   const snapshot = linkStateProducts(structuredClone(state));
-  const localKey = currentUser ? `${LOCAL_DB_STATE_KEY}:${currentUser.id}` : LOCAL_DB_STATE_KEY;
+  const localKey = currentUser ? getScopedLocalStateKey(currentUser.id) : LOCAL_DB_STATE_KEY;
 
   saveTimer = setTimeout(async () => {
     try {
@@ -119,28 +181,50 @@ function saveState() {
 }
 
 function scheduleCloudSave(snapshot) {
+  const targetFamilyId = getActiveFamilyId();
+  const scopeToken = getScopeToken(targetFamilyId);
   clearTimeout(cloudSaveTimer);
-  cloudSaveTimer = setTimeout(() => persistCloudState(snapshot), 650);
+  cloudSaveTimer = setTimeout(() => persistCloudState(snapshot, targetFamilyId, scopeToken), 650);
 }
 
-async function persistCloudState(snapshot) {
+async function persistCloudState(snapshot, targetFamilyId = getActiveFamilyId(), scopeToken = getScopeToken(targetFamilyId)) {
   if (!neonClient || !currentUser || accessProfile?.status !== "active") return;
 
   const normalizedSnapshot = linkStateProducts(structuredClone(snapshot));
-  let result = await neonClient.rpc("save_app_state", {
-    app_state: normalizedSnapshot,
-  });
+  let result;
 
-  if (result.error && isNormalizedCloudUnavailable(result.error)) {
+  if (targetFamilyId === null) {
+    result = await neonClient.rpc("save_scoped_app_state", {
+      app_state: normalizedSnapshot,
+      target_family_id: null,
+    });
+
+    if (result.error && isScopedStateRpcUnavailable(result.error)) {
+      result = await neonClient.rpc("save_app_state", {
+        app_state: normalizedSnapshot,
+      });
+    }
+  } else {
+    result = await neonClient.rpc("save_scoped_app_state", {
+      app_state: normalizedSnapshot,
+      target_family_id: targetFamilyId,
+    });
+  }
+
+  if (targetFamilyId === null && result.error && isNormalizedCloudUnavailable(result.error)) {
     result = await persistLegacyCloudState(normalizedSnapshot);
   }
 
-  if (!result.error) {
-    cloudStateExists = true;
-    updateSyncIndicator("synced");
-  } else {
-    updateSyncIndicator("offline");
+  if (scopeToken === getScopeToken()) {
+    if (!result.error) {
+      cloudStateExists = true;
+      updateSyncIndicator("synced");
+    } else {
+      updateSyncIndicator("offline");
+    }
   }
+
+  return result;
 }
 
 function getSessionUser(sessionResult) {
@@ -170,12 +254,50 @@ async function getAccessProfile(user) {
   return created.data?.[0] || null;
 }
 
-async function loadCloudState(userId) {
-  const normalizedResult = await neonClient.rpc("load_app_state");
-  if (!normalizedResult.error) {
-    cloudStateExists = Boolean(normalizedResult.data?.has_state);
-    return cloudStateExists ? normalizedResult.data?.state || null : null;
+async function refreshFamilyContext() {
+  if (!neonClient || !currentUser || accessProfile?.status !== "active") {
+    setFamilyContext();
+    return;
   }
+
+  const result = await neonClient.rpc("list_family_groups");
+  if (result.error) {
+    if (isFamilyGroupsUnavailable(result.error)) {
+      setFamilyContext();
+      return;
+    }
+    throw result.error;
+  }
+
+  setFamilyContext(result.data || []);
+}
+
+async function loadCloudState(userId, targetFamilyId = getActiveFamilyId()) {
+  let normalizedResult;
+
+  if (targetFamilyId === null) {
+    normalizedResult = await neonClient.rpc("load_scoped_app_state", {
+      target_family_id: null,
+    });
+
+    if (normalizedResult.error && isScopedStateRpcUnavailable(normalizedResult.error)) {
+      normalizedResult = await neonClient.rpc("load_app_state");
+    }
+  } else {
+    normalizedResult = await neonClient.rpc("load_scoped_app_state", {
+      target_family_id: targetFamilyId,
+    });
+  }
+
+  if (!normalizedResult.error) {
+    const exists = Boolean(normalizedResult.data?.has_state);
+    return {
+      exists,
+      state: exists ? normalizedResult.data?.state || null : null,
+    };
+  }
+
+  if (targetFamilyId !== null) throw normalizedResult.error;
 
   if (!isNormalizedCloudUnavailable(normalizedResult.error)) {
     throw normalizedResult.error;
@@ -188,8 +310,10 @@ async function loadCloudState(userId) {
     .limit(1);
 
   if (legacyResult.error) throw legacyResult.error;
-  cloudStateExists = Boolean(legacyResult.data?.[0]);
-  return legacyResult.data?.[0]?.state || null;
+  return {
+    exists: Boolean(legacyResult.data?.[0]),
+    state: legacyResult.data?.[0]?.state || null,
+  };
 }
 
 async function persistLegacyCloudState(snapshot) {
@@ -208,6 +332,56 @@ async function ensureCloudStateMigrated() {
   const result = await neonClient.rpc("migrate_legacy_user_state");
   if (result.error && !isNormalizedCloudUnavailable(result.error)) {
     throw result.error;
+  }
+}
+
+async function loadStateForCurrentScope({ seedSnapshot = null } = {}) {
+  const targetFamilyId = getActiveFamilyId();
+  const scopeToken = getScopeToken(targetFamilyId);
+  const scopeLocalKey = getScopedLocalStateKey(currentUser.id, targetFamilyId);
+  const legacyUserLocalKey = `${LOCAL_DB_STATE_KEY}:${currentUser.id}`;
+
+  const requests = [loadCloudState(currentUser.id, targetFamilyId), readState(scopeLocalKey)];
+  if (isPersonalScope(targetFamilyId)) {
+    requests.push(readState(legacyUserLocalKey), readState(LOCAL_DB_STATE_KEY));
+  }
+
+  const results = await Promise.all(requests);
+  const cloudSaved = results[0];
+  const scopedLocalSaved = results[1];
+  const legacyUserLocalSaved = isPersonalScope(targetFamilyId) ? results[2] : null;
+  const legacySaved = isPersonalScope(targetFamilyId) ? results[3] : null;
+
+  if (scopeToken !== getScopeToken(targetFamilyId)) return;
+
+  cloudStateExists = cloudSaved.exists;
+
+  const fallbackSaved = isPersonalScope(targetFamilyId) ? legacyUserLocalSaved || legacySaved || loadLegacyState() : null;
+  const seededSnapshot = !cloudSaved.state && !scopedLocalSaved && !fallbackSaved && seedSnapshot ? structuredClone(seedSnapshot) : null;
+  const saved = cloudSaved.state || scopedLocalSaved || fallbackSaved || seededSnapshot;
+
+  state = hydrateState(saved);
+  const hashView = window.location.hash.slice(1);
+  if (availableViews.includes(hashView)) {
+    state.activeView = hashView;
+  }
+  syncMealDates();
+  syncIngredientAvailability();
+  render();
+
+  if (seededSnapshot) {
+    await persistCloudState(structuredClone(state), targetFamilyId, scopeToken);
+  }
+
+  if (isPersonalScope(targetFamilyId) && !scopedLocalSaved) {
+    if (legacyUserLocalSaved) {
+      await writeState(state, scopeLocalKey);
+      await deleteState(legacyUserLocalKey);
+    } else if (legacySaved) {
+      await writeState(state, scopeLocalKey);
+      await deleteState(LOCAL_DB_STATE_KEY);
+      localStorage.removeItem(STORAGE_KEY);
+    }
   }
 }
 
@@ -287,6 +461,7 @@ async function signOut() {
   await neonClient?.auth.signOut();
   currentUser = null;
   accessProfile = null;
+  setFamilyContext();
   cloudStateExists = false;
   authFormMode = "sign-in";
   renderAuthScreen();
@@ -296,15 +471,14 @@ function updateSyncIndicator(status) {
   const indicator = document.querySelector("#syncIndicator");
   if (!indicator) return;
   indicator.classList.toggle("offline", status === "offline");
-  indicator.querySelector("span:last-child").textContent =
-    status === "offline" ? "Офлайн — зміни лишилися на телефоні" : "Синхронізовано з Neon";
+  indicator.querySelector("span:last-child").textContent = getSyncIndicatorLabel(status);
 }
 
 function render() {
   document.body.classList.remove("auth-mode");
   const renderers = {
     home: () => renderHomeView(state),
-    menu: () => renderMenuView(state, currentUser),
+    menu: () => renderMenuView(state, currentUser, getSyncIndicatorLabel("synced")),
     shopping: () => renderShoppingView(state),
     pantry: () => renderPantryView(state),
   };
@@ -1304,9 +1478,11 @@ function openAccountModal() {
       <div>
         <strong>${accessProfile?.role === "admin" ? "Адміністратор" : "Користувач"}</strong>
         <span>Доступ: ${accessProfile?.status === "active" ? "активний" : accessProfile?.status}</span>
+        <span>Простір: ${escapeHtml(getCurrentScopeLabel())}</span>
       </div>
     </div>
     <div class="account-actions">
+      <button class="secondary-button" type="button" data-manage-family>${icon("users")} Сімейні групи</button>
       ${
         accessProfile?.role === "admin"
           ? `<button class="secondary-button" type="button" data-manage-users>${icon("users")} Керувати користувачами</button>`
@@ -1316,10 +1492,299 @@ function openAccountModal() {
     </div>
   `);
 
+  modalSheet.querySelector("[data-manage-family]")?.addEventListener("click", openFamilyGroupsModal);
   modalSheet.querySelector("[data-manage-users]")?.addEventListener("click", openAdminUsersModal);
   modalSheet.querySelector("[data-account-signout]").addEventListener("click", async () => {
     closeModal();
     await signOut();
+  });
+}
+
+function describeFamilyRole(role) {
+  return role === "owner" ? "Власник" : "Учасник";
+}
+
+async function switchFamilyScope(targetFamilyId) {
+  const currentFamilyId = getActiveFamilyId();
+  if (currentFamilyId === targetFamilyId || (currentFamilyId === null && targetFamilyId === null)) return false;
+
+  try {
+    const result = await neonClient.rpc("set_active_family_group", {
+      target_family_id: targetFamilyId,
+    });
+
+    if (result.error) {
+      showToast(getFamilyGroupsErrorMessage(result.error, "Не вдалося перемкнути простір"));
+      return false;
+    }
+
+    await refreshFamilyContext();
+    await loadStateForCurrentScope();
+    closeModal();
+    showToast(`Активний простір: ${getCurrentScopeLabel()}`);
+    return true;
+  } catch (error) {
+    showToast(getFamilyGroupsErrorMessage(error, "Не вдалося перемкнути простір"));
+    return false;
+  }
+}
+
+async function openFamilyGroupsModal() {
+  openModal(`
+    <div class="sheet-handle"></div>
+    <div class="sheet-header">
+      <div>
+        <h2 id="modalTitle">Сімейні групи</h2>
+        <p>Завантажую простори й учасників…</p>
+      </div>
+      <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
+    </div>
+    <div class="modal-loading"><span></span></div>
+  `);
+
+  const groupsResult = await neonClient.rpc("list_family_groups");
+  if (groupsResult.error) {
+    openModal(`
+      <div class="sheet-handle"></div>
+      <div class="sheet-header">
+        <div>
+          <h2 id="modalTitle">Не вдалося завантажити</h2>
+          <p>${escapeHtml(getFamilyGroupsErrorMessage(groupsResult.error, "Помилка Neon Data API"))}</p>
+        </div>
+        <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
+      </div>
+    `);
+    return;
+  }
+
+  const groups = groupsResult.data || [];
+  setFamilyContext(groups);
+  const activeGroup = groups.find((group) => group.is_active) || null;
+  let members = [];
+
+  if (activeGroup) {
+    const membersResult = await neonClient.rpc("list_family_group_members", {
+      target_family_id: activeGroup.family_id,
+    });
+
+    if (membersResult.error) {
+      openModal(`
+        <div class="sheet-handle"></div>
+        <div class="sheet-header">
+          <div>
+            <h2 id="modalTitle">Не вдалося завантажити</h2>
+            <p>${escapeHtml(getFamilyGroupsErrorMessage(membersResult.error, "Помилка Neon Data API"))}</p>
+          </div>
+          <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
+        </div>
+      `);
+      return;
+    }
+
+    members = membersResult.data || [];
+  }
+
+  openModal(`
+    <div class="sheet-handle"></div>
+    <div class="sheet-header">
+      <div>
+        <h2 id="modalTitle">Сімейні групи</h2>
+        <p>Учасники однієї групи бачать спільні меню, рецепти, запаси й покупки.</p>
+      </div>
+      <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
+    </div>
+    <div class="alternative-card">
+      <strong>Активний простір</strong>
+      <p>${escapeHtml(getCurrentScopeLabel())}</p>
+    </div>
+    <div class="family-space-list">
+      <button class="family-space-card ${activeGroup ? "" : "active"}" type="button" data-switch-family="">
+        <strong>Особистий простір</strong>
+        <span>Дані бачиш лише ти</span>
+      </button>
+      ${groups
+        .map(
+          (group) => `
+            <button class="family-space-card ${group.is_active ? "active" : ""}" type="button" data-switch-family="${group.family_id}">
+              <strong>${escapeHtml(group.family_name)}</strong>
+              <span>${describeFamilyRole(group.membership_role)} · ${group.member_count} ${pluralize(group.member_count, "учасник", "учасники", "учасників")}</span>
+            </button>
+          `,
+        )
+        .join("")}
+    </div>
+    <form id="familyCreateForm">
+      <label class="field">
+        <span>Нова група</span>
+        <input name="familyName" type="text" placeholder="Наприклад, Родина Іваненків" maxlength="80" required />
+      </label>
+      <button class="primary-button family-modal-button" type="submit">${icon("plus")} Створити сімейний простір</button>
+    </form>
+    ${
+      activeGroup
+        ? `
+          <section class="family-members-section">
+            <div class="sheet-header family-section-header">
+              <div>
+                <h3>${escapeHtml(activeGroup.family_name)}</h3>
+                <p>${describeFamilyRole(activeGroup.membership_role)} · ${members.length} ${pluralize(members.length, "учасник", "учасники", "учасників")}</p>
+              </div>
+            </div>
+            <div class="admin-user-list">
+              ${members
+                .map(
+                  (member) => `
+                    <article class="admin-user-card">
+                      <div class="admin-user-head">
+                        <span class="account-avatar">${escapeHtml((member.email || "U").slice(0, 1).toUpperCase())}</span>
+                        <div>
+                          <strong>${escapeHtml(member.display_name || member.email)}</strong>
+                          <span>${escapeHtml(member.email)}${member.is_current_user ? " · це ти" : ""}</span>
+                        </div>
+                      </div>
+                      <div class="family-member-footer">
+                        <span class="family-role-chip">${describeFamilyRole(member.membership_role)}</span>
+                        ${
+                          activeGroup.membership_role === "owner" && !member.is_current_user
+                            ? `<button class="compact-button family-remove-button" type="button" data-remove-family-member="${escapeHtml(member.user_id)}">Прибрати</button>`
+                            : ""
+                        }
+                      </div>
+                    </article>
+                  `,
+                )
+                .join("")}
+            </div>
+            ${
+              activeGroup.membership_role === "owner"
+                ? `
+                  <form id="familyAddMemberForm">
+                    <label class="field">
+                      <span>Додати учасника за email</span>
+                      <input name="email" type="email" placeholder="member@example.com" autocomplete="email" required />
+                    </label>
+                    <button class="secondary-button family-modal-button" type="submit">${icon("plus")} Додати в групу</button>
+                  </form>
+                `
+                : `
+                  <div class="alternative-card family-readonly-card">
+                    <strong>Керування доступом</strong>
+                    <p>Змінювати склад цієї групи може лише її власник.</p>
+                  </div>
+                `
+            }
+          </section>
+        `
+        : `
+          <div class="alternative-card family-readonly-card">
+            <strong>Поки без сімейної групи</strong>
+            <p>Створи групу, якщо хочеш ділити меню, рецепти, запаси та список покупок з родиною.</p>
+          </div>
+        `
+    }
+  `);
+
+  modalSheet.querySelectorAll("[data-switch-family]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const targetFamilyId = button.dataset.switchFamily ? Number(button.dataset.switchFamily) : null;
+      if (targetFamilyId === getActiveFamilyId() || (targetFamilyId === null && getActiveFamilyId() === null)) return;
+      button.disabled = true;
+      const switched = await switchFamilyScope(targetFamilyId);
+      if (!switched) button.disabled = false;
+    });
+  });
+
+  modalSheet.querySelector("#familyCreateForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const submitButton = form.querySelector("button[type='submit']");
+    const formData = new FormData(form);
+    const familyName = formData.get("familyName").trim();
+    const snapshot = linkStateProducts(structuredClone(state));
+
+    submitButton.disabled = true;
+    submitButton.textContent = "Створюю…";
+
+    try {
+      const result = await neonClient.rpc("create_family_group", {
+        group_name: familyName,
+      });
+
+      if (result.error) {
+        submitButton.disabled = false;
+        submitButton.innerHTML = `${icon("plus")} Створити сімейний простір`;
+        showToast(getFamilyGroupsErrorMessage(result.error, "Не вдалося створити групу"));
+        return;
+      }
+
+      await refreshFamilyContext();
+      await loadStateForCurrentScope({ seedSnapshot: snapshot });
+      closeModal();
+      showToast(`Створено: ${getCurrentScopeLabel()}`);
+    } catch (error) {
+      submitButton.disabled = false;
+      submitButton.innerHTML = `${icon("plus")} Створити сімейний простір`;
+      showToast(getFamilyGroupsErrorMessage(error, "Не вдалося створити групу"));
+    }
+  });
+
+  modalSheet.querySelector("#familyAddMemberForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const submitButton = form.querySelector("button[type='submit']");
+    const formData = new FormData(form);
+
+    submitButton.disabled = true;
+    submitButton.textContent = "Додаю…";
+
+    try {
+      const result = await neonClient.rpc("add_family_group_member", {
+        target_family_id: activeGroup.family_id,
+        member_email: formData.get("email").trim(),
+      });
+
+      if (result.error) {
+        submitButton.disabled = false;
+        submitButton.innerHTML = `${icon("plus")} Додати в групу`;
+        showToast(getFamilyGroupsErrorMessage(result.error, "Не вдалося додати учасника"));
+        return;
+      }
+
+      await openFamilyGroupsModal();
+      showToast("Учасника додано");
+    } catch (error) {
+      submitButton.disabled = false;
+      submitButton.innerHTML = `${icon("plus")} Додати в групу`;
+      showToast(getFamilyGroupsErrorMessage(error, "Не вдалося додати учасника"));
+    }
+  });
+
+  modalSheet.querySelectorAll("[data-remove-family-member]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      button.textContent = "Прибираю…";
+
+      try {
+        const result = await neonClient.rpc("remove_family_group_member", {
+          target_family_id: activeGroup.family_id,
+          member_user_id: button.dataset.removeFamilyMember,
+        });
+
+        if (result.error) {
+          button.disabled = false;
+          button.textContent = "Прибрати";
+          showToast(getFamilyGroupsErrorMessage(result.error, "Не вдалося прибрати учасника"));
+          return;
+        }
+
+        await openFamilyGroupsModal();
+        showToast("Учасника прибрано");
+      } catch (error) {
+        button.disabled = false;
+        button.textContent = "Прибрати";
+        showToast(getFamilyGroupsErrorMessage(error, "Не вдалося прибрати учасника"));
+      }
+    });
   });
 }
 
@@ -1621,6 +2086,7 @@ async function bootstrap() {
       state = hydrateState(saved);
       currentUser = null;
       accessProfile = null;
+      setFamilyContext();
       const hashView = window.location.hash.slice(1);
       if (availableViews.includes(hashView)) {
         state.activeView = hashView;
@@ -1636,6 +2102,7 @@ async function bootstrap() {
     if (!user) {
       currentUser = null;
       accessProfile = null;
+      setFamilyContext();
       renderAuthScreen();
       return;
     }
@@ -1643,37 +2110,14 @@ async function bootstrap() {
     currentUser = user;
     accessProfile = await getAccessProfile(user);
     if (!accessProfile || accessProfile.status !== "active") {
+      setFamilyContext();
       renderAccessScreen(accessProfile || { status: "pending" });
       return;
     }
 
     await ensureCloudStateMigrated();
-
-    const userLocalKey = `${LOCAL_DB_STATE_KEY}:${user.id}`;
-    const [cloudSaved, userLocalSaved, legacySaved] = await Promise.all([
-      loadCloudState(user.id),
-      readState(userLocalKey),
-      readState(LOCAL_DB_STATE_KEY),
-    ]);
-
-    const saved = cloudSaved || userLocalSaved || legacySaved || loadLegacyState();
-    state = hydrateState(saved);
-    const hashView = window.location.hash.slice(1);
-    if (availableViews.includes(hashView)) {
-      state.activeView = hashView;
-    }
-    syncMealDates();
-    syncIngredientAvailability();
-    render();
-
-    if (!cloudStateExists) {
-      await persistCloudState(structuredClone(state));
-    }
-    if (!userLocalSaved && legacySaved) {
-      await writeState(state, userLocalKey);
-      await deleteState(LOCAL_DB_STATE_KEY);
-      localStorage.removeItem(STORAGE_KEY);
-    }
+    await refreshFamilyContext();
+    await loadStateForCurrentScope();
   } catch (error) {
     if (currentUser) {
       renderAccessScreen(accessProfile || { status: "pending" }, error?.message || "Не вдалося перевірити доступ");

@@ -279,7 +279,7 @@ export function renderHomeView(state) {
   `;
 }
 
-export function renderMenuView(state, currentUser) {
+export function renderMenuView(state, currentUser, syncLabel = currentUser ? "Синхронізовано з Neon" : "Локальний режим") {
   const dates = state.meals
     .map(
       (meal, index) => `
@@ -357,7 +357,7 @@ export function renderMenuView(state, currentUser) {
       <div class="recipe-toolbar">
         <div class="database-note" id="syncIndicator">
           <span class="database-dot"></span>
-          <span>${currentUser ? "Синхронізовано з Neon" : "Локальний режим"}</span>
+          <span>${syncLabel}</span>
         </div>
         <button class="compact-button primary" type="button" data-add-recipe>${icon("plus")} Рецепт</button>
       </div>
