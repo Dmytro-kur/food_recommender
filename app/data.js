@@ -1,23 +1,11 @@
 export const STORAGE_KEY = "krykhta-state-v1";
 export const LOCAL_DB_STATE_KEY = "state";
-export const STARTER_DATA_VERSION = 2;
-export const availableViews = ["home", "menu", "shopping", "pantry"];
+export const STARTER_DATA_VERSION = 3;
+export const availableViews = ["recipes", "requests", "pantry"];
 
 const baseState = {
   dataVersion: STARTER_DATA_VERSION,
-  activeView: "home",
-  priority: "balance",
-  selectedDay: 0,
-  budget: 420,
-  shopping: [
-    { id: 1, name: "Куряче філе", amount: "500 г", price: 96, category: "М’ясо та риба", checked: false, urgent: true },
-    { id: 2, name: "Йогурт натуральний", amount: "200 г", price: 31, category: "Молочне", checked: false, urgent: false },
-    { id: 3, name: "Печериці", amount: "300 г", price: 42, category: "Овочі", checked: false, urgent: false },
-    { id: 4, name: "Помідори", amount: "500 г", price: 48, category: "Овочі", checked: true, urgent: false },
-    { id: 5, name: "Зелень", amount: "1 пучок", price: 22, category: "Овочі", checked: false, urgent: false },
-    { id: 6, name: "Булгур", amount: "400 г", price: 39, category: "Бакалія", checked: true, urgent: false },
-    { id: 7, name: "Хліб цільнозерновий", amount: "1 шт", price: 36, category: "Бакалія", checked: false, urgent: false },
-  ],
+  activeView: "recipes",
   pantry: [
     { id: 1, name: "Яйця", amount: "6 шт", emoji: "🥚", low: false },
     { id: 2, name: "Гречка", amount: "350 г", emoji: "🌾", low: false },
@@ -27,173 +15,8 @@ const baseState = {
     { id: 6, name: "Картопля", amount: "1,2 кг", emoji: "🥔", low: false },
     { id: 7, name: "Квасоля", amount: "1 банка", emoji: "🫘", low: false },
   ],
-  meals: [
-    {
-      id: 1,
-      day: "Сьогодні",
-      shortDay: "Пн",
-      date: 19,
-      title: "Курка з булгуром",
-      time: 25,
-      price: 78,
-      emoji: "🍲",
-      tag: "Найкращий баланс",
-      ingredients: [
-        { name: "Булгур", amount: "180 г", missing: false },
-        { name: "Морква", amount: "1 шт", missing: false },
-        { name: "Цибуля", amount: "1 шт", missing: false },
-        { name: "Куряче філе", amount: "300 г", missing: true },
-        { name: "Йогурт", amount: "100 г", missing: true },
-      ],
-    },
-    {
-      id: 2,
-      day: "Завтра",
-      shortDay: "Вт",
-      date: 20,
-      title: "Гречка з грибами",
-      time: 18,
-      price: 44,
-      emoji: "🍄",
-      tag: "Найдешевше",
-      ingredients: [
-        { name: "Гречка", amount: "180 г", missing: false },
-        { name: "Цибуля", amount: "1 шт", missing: false },
-        { name: "Печериці", amount: "250 г", missing: true },
-        { name: "Йогурт", amount: "80 г", missing: true },
-      ],
-    },
-    {
-      id: 3,
-      day: "Середа",
-      shortDay: "Ср",
-      date: 21,
-      title: "Теплий салат з квасолею",
-      time: 12,
-      price: 52,
-      emoji: "🥗",
-      tag: "Найшвидше",
-      ingredients: [
-        { name: "Квасоля", amount: "1 банка", missing: false },
-        { name: "Морква", amount: "1 шт", missing: false },
-        { name: "Помідори", amount: "2 шт", missing: false },
-        { name: "Зелень", amount: "пів пучка", missing: true },
-      ],
-    },
-    {
-      id: 4,
-      day: "Четвер",
-      shortDay: "Чт",
-      date: 22,
-      title: "Картопляна фритата",
-      time: 22,
-      price: 39,
-      emoji: "🍳",
-      tag: "З того, що є",
-      ingredients: [
-        { name: "Яйця", amount: "4 шт", missing: false },
-        { name: "Картопля", amount: "400 г", missing: false },
-        { name: "Цибуля", amount: "1 шт", missing: false },
-        { name: "Сир", amount: "60 г", missing: false },
-      ],
-    },
-    {
-      id: 5,
-      day: "П’ятниця",
-      shortDay: "Пт",
-      date: 23,
-      title: "Овочевий суп",
-      time: 30,
-      price: 46,
-      emoji: "🥣",
-      tag: "На два дні",
-      ingredients: [
-        { name: "Картопля", amount: "500 г", missing: false },
-        { name: "Морква", amount: "2 шт", missing: false },
-        { name: "Цибуля", amount: "1 шт", missing: false },
-        { name: "Зелень", amount: "пів пучка", missing: true },
-      ],
-    },
-    {
-      id: 6,
-      day: "Субота",
-      shortDay: "Сб",
-      date: 24,
-      title: "Сирні гарячі тости",
-      time: 10,
-      price: 51,
-      emoji: "🥪",
-      tag: "Дуже швидко",
-      ingredients: [
-        { name: "Хліб", amount: "4 скибки", missing: true },
-        { name: "Сир", amount: "80 г", missing: false },
-        { name: "Помідори", amount: "1 шт", missing: false },
-      ],
-    },
-    {
-      id: 7,
-      day: "Неділя",
-      shortDay: "Нд",
-      date: 25,
-      title: "Запечена картопля",
-      time: 35,
-      price: 43,
-      emoji: "🥔",
-      tag: "Мінімум зусиль",
-      ingredients: [
-        { name: "Картопля", amount: "700 г", missing: false },
-        { name: "Йогурт", amount: "120 г", missing: true },
-        { name: "Зелень", amount: "пів пучка", missing: true },
-      ],
-    },
-  ],
   productCatalog: [],
   recipeCatalog: [],
-};
-
-export const cookingGuides = {
-  "Курка з булгуром": [
-    "Промий булгур. Залий його водою у співвідношенні один до двох, трохи посоли й вари 12–15 хвилин.",
-    "Наріж куряче філе невеликими шматочками, а моркву та цибулю — кубиками.",
-    "Обсмаж курку 5–6 хвилин на добре розігрітій пательні.",
-    "Додай овочі та готуй ще 5 хвилин, поки вони не стануть м’якими.",
-    "Змішай курку з булгуром. Подай з ложкою натурального йогурту.",
-  ],
-  "Гречка з грибами": [
-    "Промий гречку, залий двома частинами води та вари під кришкою 15 хвилин.",
-    "Наріж цибулю й печериці.",
-    "Обсмаж цибулю 2 хвилини, додай гриби та готуй ще 6–7 хвилин.",
-    "Змішай гриби з готовою гречкою, посоли й додай ложку йогурту перед подачею.",
-  ],
-  "Теплий салат з квасолею": [
-    "Злий рідину з квасолі та промий її.",
-    "Наріж моркву тонкою соломкою, а помідори — часточками.",
-    "Прогрій квасолю з морквою на пательні 5 хвилин.",
-    "Зніми з вогню, додай помідори, зелень, сіль та трохи олії.",
-  ],
-  "Картопляна фритата": [
-    "Наріж картоплю тонкими скибками, а цибулю — півкільцями.",
-    "Обсмаж картоплю з цибулею під кришкою 10 хвилин.",
-    "Збий яйця з дрібкою солі та залий ними картоплю.",
-    "Посип сиром і готуй під кришкою ще 7–8 хвилин на малому вогні.",
-  ],
-  "Овочевий суп": [
-    "Постав 1,5 літра води на вогонь.",
-    "Наріж картоплю кубиками й вари 10 хвилин.",
-    "Додай нарізані моркву та цибулю, посоли й вари ще 12–15 хвилин.",
-    "Вимкни вогонь, додай зелень і дай супу постояти 5 хвилин.",
-  ],
-  "Сирні гарячі тости": [
-    "Наріж помідор тонкими скибками.",
-    "Виклади на хліб сир і помідор.",
-    "Підсмаж тости на сухій пательні під кришкою по 3–4 хвилини з кожного боку.",
-  ],
-  "Запечена картопля": [
-    "Розігрій духовку до 210 градусів.",
-    "Добре помий картоплю, наріж часточками та змішай із сіллю й ложкою олії.",
-    "Запікай 30–35 хвилин, один раз перемішавши.",
-    "Змішай йогурт із зеленню та подай як соус.",
-  ],
 };
 
 const starterProductCatalog = [

@@ -1,35 +1,10 @@
-import { getSortedSuggestions, shoppingTotal, checkedTotal } from "./state.js";
 import {
   describePurchaseRequestStatus,
   formatFamilyDateTime,
   getPurchaseRequestStatusClass,
 } from "./family.js";
 import { escapeHtml, pluralize } from "./utils.js";
-import { formatMoney, getWeekRangeLabel, icon } from "./ui.js";
-
-function renderPriorityToggle(priority) {
-  const priorities = [
-    ["time", "⚡ Швидше"],
-    ["price", "₴ Дешевше"],
-    ["balance", "◎ Баланс"],
-  ];
-
-  return `
-    <div class="priority-toggle" aria-label="Пріоритет рекомендацій">
-      ${priorities
-        .map(
-          ([value, label]) => `
-            <button
-              class="priority-option ${priority === value ? "active" : ""}"
-              type="button"
-              data-priority="${value}"
-            >${label}</button>
-          `,
-        )
-        .join("")}
-    </div>
-  `;
-}
+import { formatMoney, icon } from "./ui.js";
 
 function renderPantryCard(item) {
   return `
@@ -66,7 +41,7 @@ export function renderAuthScreenMarkup({ signingUp, message = "" }) {
         <p class="eyebrow">${signingUp ? "Новий користувач" : "З поверненням"}</p>
         <h1>${signingUp ? "Створити акаунт" : "Увійти в апку"}</h1>
         <p class="auth-description">
-          ${signingUp ? "Після реєстрації адміністратор має дозволити доступ." : "Твоє меню та запаси синхронізуються між пристроями."}
+          ${signingUp ? "Після реєстрації адміністратор має дозволити доступ." : "Твої рецепти, інгредієнти й заявки синхронізуються між пристроями."}
         </p>
         ${message ? `<div class="auth-message">${escapeHtml(message)}</div>` : ""}
         <form id="authForm">
@@ -156,208 +131,55 @@ export function renderAccessScreenMarkup(profile, errorMessage = "") {
   `;
 }
 
-export function renderHomeView(state) {
-  if (!state.meals.length) {
-    return `
-      <section class="screen">
-        <p class="eyebrow">План на сьогодні</p>
-        <h1 class="screen-title">Час додати перший рецепт.</h1>
-        <div class="empty-state">
-          <span class="empty-state-emoji">🍽️</span>
-          <h3>Меню поки порожнє</h3>
-          <p>Створи рецепт з інгредієнтами та покроковим приготуванням.</p>
-          <button class="compact-button primary" type="button" data-add-recipe>${icon("plus")} Додати рецепт</button>
-        </div>
-      </section>
-    `;
-  }
-
-  const meal = state.meals[0];
-  const missing = meal.ingredients.filter((item) => item.missing);
-  const currentTotal = shoppingTotal(state);
-  const budgetPercent = Math.min(100, (currentTotal / state.budget) * 100);
-  const sortedSuggestions = getSortedSuggestions(state);
-  const suggestionsMarkup = sortedSuggestions
-    .map(
-      (item) => `
-        <article class="suggestion-card">
-          <div class="suggestion-emoji" aria-hidden="true">${item.emoji}</div>
-          <div>
-            <h3>${item.title}</h3>
-            <p>
-              <span>${item.time} хв</span>
-              <span>${formatMoney(item.price)}</span>
-              <span class="suggestion-score">${item.available}/${item.total} є вдома</span>
-            </p>
-          </div>
-          <button class="card-arrow" type="button" data-open-meal="${item.id}" aria-label="Переглянути ${item.title}">
-            ${icon("arrow")}
-          </button>
-        </article>
-      `,
-    )
-    .join("");
+function renderRecipeCard(recipe) {
+  const missingCount = recipe.ingredients.filter((item) => item.missing).length;
+  const missingLabel = missingCount
+    ? `${missingCount} ${pluralize(missingCount, "інгредієнт", "інгредієнти", "інгредієнтів")} бракує`
+    : "можна готувати зараз";
 
   return `
-    <section class="screen">
-      <p class="eyebrow">План на сьогодні</p>
-      <h1 class="screen-title">Смачно, швидко<br />і без зайвих витрат.</h1>
-      ${renderPriorityToggle(state.priority)}
-
-      <article class="summary-card">
-        <div>
-          <span class="summary-label">Кошик на тиждень</span>
-          <span class="summary-value">${formatMoney(currentTotal)} <small>/ ${state.budget} ₴</small></span>
-          <div class="progress-track">
-            <div class="progress-fill" style="width: ${budgetPercent}%"></div>
-          </div>
-          <p class="summary-meta">${state.budget - currentTotal >= 0 ? `Ще ${formatMoney(state.budget - currentTotal)} у бюджеті` : `Перевищення на ${formatMoney(currentTotal - state.budget)}`}</p>
-        </div>
-        <div class="summary-stats">
-          <div class="mini-stat">
-            <strong>${state.meals.length}</strong>
-            <span>вечерь у плані</span>
-          </div>
-          <div class="mini-stat">
-            <strong>${Math.round(state.meals.reduce((sum, item) => sum + item.time, 0) / state.meals.length)} хв</strong>
-            <span>у середньому</span>
-          </div>
-        </div>
-      </article>
-
-      <section class="section">
-        <div class="section-header">
-          <h2 class="section-title">Готуємо сьогодні</h2>
-          <button class="text-button" type="button" data-view-link="menu">Весь план</button>
-        </div>
-        <article class="meal-hero">
-          <div class="meal-art" aria-hidden="true">${meal.emoji}</div>
-          <div class="meal-hero-content">
-            <span class="tag">✦ ${meal.tag}</span>
-            <div>
-              <h3 class="meal-hero-title">${meal.title}</h3>
-              <div class="meal-meta">
-                <span class="meta-chip">${icon("clock")}${meal.time} хв</span>
-                <span class="meta-chip">${icon("wallet")}${formatMoney(meal.price)}</span>
-              </div>
-            </div>
-            <div class="meal-actions">
-              <button class="primary-button" type="button" data-open-meal="${meal.id}">
-                ${icon("chef")} Готувати
-              </button>
-              <button class="secondary-button swap-button" type="button" data-swap-today aria-label="Замінити страву">
-                ${icon("swap")}
-              </button>
-            </div>
-          </div>
-        </article>
-        ${
-          missing.length
-            ? `
-              <div class="missing-strip">
-                <div class="missing-icon" aria-hidden="true">🛒</div>
-                <div class="missing-copy">
-                  <strong>Не вистачає ${missing.length} ${pluralize(missing.length, "продукту", "продуктів", "продуктів")}</strong>
-                  <span>${missing.map((item) => item.name).join(", ")}</span>
-                </div>
-                <button class="round-add" type="button" data-add-missing="${meal.id}" aria-label="Додати відсутні продукти">+</button>
-              </div>
-            `
-            : ""
-        }
-      </section>
-
-      ${
-        sortedSuggestions.length
-          ? `
-            <section class="section">
-              <div class="section-header">
-                <h2 class="section-title">Можна ще дешевше</h2>
-                <span class="date-label">під твій пріоритет</span>
-              </div>
-              <div class="suggestion-list">${suggestionsMarkup}</div>
-            </section>
-          `
-          : ""
-      }
-    </section>
+    <article class="catalog-recipe-card">
+      <div class="catalog-recipe-emoji" aria-hidden="true">${recipe.emoji}</div>
+      <div class="catalog-recipe-copy">
+        <span class="catalog-tag">${missingCount ? "Потрібні інгредієнти" : "Готово до приготування"}</span>
+        <h3>${escapeHtml(recipe.title)}</h3>
+        <p>${recipe.time} хв · ${formatMoney(recipe.price)} · ${missingLabel}</p>
+      </div>
+      <div class="catalog-recipe-actions">
+        <button class="tiny-icon-button" type="button" data-open-recipe="${recipe.id}" aria-label="Переглянути ${escapeHtml(recipe.title)}">
+          ${icon("arrow")}
+        </button>
+        <button class="tiny-icon-button" type="button" data-edit-recipe="${recipe.id}" aria-label="Редагувати ${escapeHtml(recipe.title)}">
+          ${icon("edit")}
+        </button>
+        <button class="tiny-icon-button danger" type="button" data-delete-recipe="${recipe.id}" aria-label="Видалити ${escapeHtml(recipe.title)}">
+          ${icon("trash")}
+        </button>
+      </div>
+    </article>
   `;
 }
 
-export function renderMenuView(state, currentUser, syncLabel = currentUser ? "Синхронізовано з Neon" : "Локальний режим") {
-  const dates = state.meals
-    .map(
-      (meal, index) => `
-        <button class="day-button ${state.selectedDay === index ? "active" : ""}" type="button" data-day-index="${index}">
-          <span>${meal.shortDay}</span>
-          <strong>${meal.date}</strong>
-        </button>
-      `,
-    )
-    .join("");
-
-  const weeklyPrice = state.meals.reduce((sum, meal) => sum + meal.price, 0);
-  const mealCards = state.meals
-    .map(
-      (meal, index) => `
-        <article class="menu-day-card" data-menu-day="${index}" ${index !== state.selectedDay ? 'style="display:none"' : ""}>
-          <div class="menu-day-top">
-            <p class="menu-day-label">${meal.day}</p>
-            <span class="menu-price">${formatMoney(meal.price)}</span>
-          </div>
-          <div class="menu-meal-row">
-            <div class="menu-meal-emoji" aria-hidden="true">${meal.emoji}</div>
-            <div>
-              <h3>${meal.title}</h3>
-              <p>${meal.time} хв · ${meal.ingredients.filter((item) => item.missing).length ? `${meal.ingredients.filter((item) => item.missing).length} треба купити` : "усе є вдома"}</p>
-            </div>
-            <div class="menu-actions">
-              <button class="tiny-icon-button" type="button" data-open-meal="${meal.id}" aria-label="Переглянути рецепт">
-                ${icon("arrow")}
-              </button>
-              <button class="tiny-icon-button" type="button" data-edit-recipe="${meal.id}" aria-label="Редагувати рецепт">
-                ${icon("edit")}
-              </button>
-              <button class="tiny-icon-button danger" type="button" data-delete-recipe="${meal.id}" aria-label="Видалити рецепт">
-                ${icon("trash")}
-              </button>
-            </div>
-          </div>
-        </article>
-      `,
-    )
-    .join("");
-  const catalogCards = state.recipeCatalog
-    .map(
-      (recipe) => `
-        <article class="catalog-recipe-card">
-          <div class="catalog-recipe-emoji" aria-hidden="true">${recipe.emoji}</div>
-          <div class="catalog-recipe-copy">
-            <span class="catalog-tag">${escapeHtml(recipe.tag)}</span>
-            <h3>${escapeHtml(recipe.title)}</h3>
-            <p>${recipe.time} хв · ${formatMoney(recipe.price)} · ${recipe.ingredients.length} інгредієнтів</p>
-          </div>
-          <div class="catalog-recipe-actions">
-            <button class="tiny-icon-button" type="button" data-open-recipe="${recipe.id}" aria-label="Переглянути ${escapeHtml(recipe.title)}">
-              ${icon("arrow")}
-            </button>
-            <button class="tiny-icon-button catalog-add-button" type="button" data-use-recipe="${recipe.id}" aria-label="Додати ${escapeHtml(recipe.title)} у меню">
-              ${icon("plus")}
-            </button>
-          </div>
-        </article>
-      `,
-    )
-    .join("");
+export function renderRecipesView(
+  state,
+  currentUser,
+  syncLabel = currentUser ? "Синхронізовано з Neon" : "Локальний режим",
+) {
+  const recipes = [...state.recipeCatalog].sort((left, right) => {
+    const leftMissing = left.ingredients.filter((item) => item.missing).length;
+    const rightMissing = right.ingredients.filter((item) => item.missing).length;
+    return leftMissing - rightMissing || left.title.localeCompare(right.title, "uk");
+  });
+  const readyCount = recipes.filter((recipe) => recipe.ingredients.every((ingredient) => !ingredient.missing)).length;
 
   return `
     <section class="screen">
       <div class="screen-heading-row">
         <div>
-          <p class="eyebrow">${getWeekRangeLabel(Math.max(state.meals.length, 7))}</p>
-          <h1 class="screen-title">Меню тижня</h1>
+          <p class="eyebrow">Кулінарна книга</p>
+          <h1 class="screen-title">Мої рецепти</h1>
         </div>
-        <span class="date-label">${formatMoney(weeklyPrice)} · ${state.meals.reduce((sum, meal) => sum + meal.time, 0)} хв</span>
+        <span class="date-label">${recipes.length} рецептів</span>
       </div>
       <div class="recipe-toolbar">
         <div class="database-note" id="syncIndicator">
@@ -366,51 +188,43 @@ export function renderMenuView(state, currentUser, syncLabel = currentUser ? "С
         </div>
         <button class="compact-button primary" type="button" data-add-recipe>${icon("plus")} Рецепт</button>
       </div>
-      ${renderPriorityToggle(state.priority)}
-      <div class="optimization-card">
-        <span class="optimization-icon">${icon("spark")}</span>
-        <div>
-          <strong>План уже оптимізовано</strong>
-          <p>Продукти повторюються у стравах, тому менше залишків і зайвих покупок.</p>
+      <article class="shopping-summary cookbook-summary">
+        <div class="progress-ring" style="--progress: ${recipes.length ? Math.round((readyCount / recipes.length) * 360) : 0}deg">
+          <strong>${readyCount}</strong>
         </div>
-      </div>
+        <div class="shopping-summary-copy">
+          <strong>Можна приготувати вже зараз</strong>
+          <span>${readyCount} з ${recipes.length} рецептів повністю покриваються запасами</span>
+        </div>
+      </article>
       ${
-        state.meals.length
+        recipes.length
           ? `
-            <div class="week-strip">${dates}</div>
-            <div>${mealCards}</div>
-            <button class="primary-button" type="button" data-generate-list style="width:100%; margin-top: 8px;">
-              ${icon("cart")} Оновити список покупок
-            </button>
+            <section class="section">
+              <div class="section-header">
+                <div>
+                  <p class="eyebrow">Швидкий огляд</p>
+                  <h2 class="section-title">Що є в книзі</h2>
+                </div>
+                <span class="date-label">${state.pantry.length} інгредієнтів у запасах</span>
+              </div>
+              <div class="catalog-recipe-list">${recipes.map(renderRecipeCard).join("")}</div>
+            </section>
           `
           : `
             <div class="empty-state">
               <span class="empty-state-emoji">📖</span>
-              <h3>Додай свій перший рецепт</h3>
-              <p>Вкажи ціну, час, інгредієнти та кроки. Усе залишиться в базі на телефоні.</p>
+              <h3>Книга рецептів порожня</h3>
+              <p>Додай перший рецепт з інгредієнтами та кроками приготування.</p>
               <button class="compact-button primary" type="button" data-add-recipe>${icon("plus")} Створити рецепт</button>
             </div>
           `
       }
-      <section class="section recipe-catalog-section">
-        <div class="section-header">
-          <div>
-            <p class="eyebrow">База страв</p>
-            <h2 class="section-title">Каталог рецептів</h2>
-          </div>
-          <span class="date-label">${state.recipeCatalog.length} рецептів</span>
-        </div>
-        <div class="catalog-recipe-list">${catalogCards}</div>
-      </section>
     </section>
   `;
 }
 
 function renderPurchaseRequestCard(request) {
-  const noteMarkup = request.request_note
-    ? `<p class="purchase-request-note">${escapeHtml(request.request_note)}</p>`
-    : "";
-
   return `
     <article class="purchase-request-card">
       <div class="purchase-request-head">
@@ -420,15 +234,15 @@ function renderPurchaseRequestCard(request) {
         </div>
         <span class="purchase-request-status ${getPurchaseRequestStatusClass(request.status)}">${describePurchaseRequestStatus(request.status)}</span>
       </div>
-      ${noteMarkup}
+      ${
+        request.request_note
+          ? `<p class="purchase-request-note">${escapeHtml(request.request_note)}</p>`
+          : ""
+      }
       <div class="purchase-request-stats">
         <span>Куплено ${request.bought_items} з ${request.total_items}</span>
         <span>Очікує ${request.pending_items}</span>
-        ${
-          request.not_bought_items
-            ? `<span>Не куплено ${request.not_bought_items}</span>`
-            : ""
-        }
+        ${request.not_bought_items ? `<span>Не куплено ${request.not_bought_items}</span>` : ""}
       </div>
       <button class="compact-button purchase-request-open" type="button" data-open-purchase-request="${request.request_id}">
         ${icon("arrow")} Деталі
@@ -437,169 +251,161 @@ function renderPurchaseRequestCard(request) {
   `;
 }
 
-export function renderShoppingView(state, context = {}) {
+function renderPurchaseTemplateCard(template) {
+  return `
+    <article class="purchase-request-card">
+      <div class="purchase-request-head">
+        <div>
+          <strong>${escapeHtml(template.template_title)}</strong>
+          <span>${escapeHtml(template.creator_display_name || "Хтось")} · ${formatFamilyDateTime(template.updated_at)}</span>
+        </div>
+        <span class="purchase-request-status idle">Шаблон</span>
+      </div>
+      ${
+        template.template_note
+          ? `<p class="purchase-request-note">${escapeHtml(template.template_note)}</p>`
+          : ""
+      }
+      <div class="purchase-request-stats">
+        <span>${template.item_count} ${pluralize(template.item_count, "позиція", "позиції", "позицій")}</span>
+      </div>
+      <div class="purchase-request-toolbar">
+        <button class="compact-button primary add-item-button" type="button" data-reuse-purchase-template="${template.template_id}">
+          ${icon("plus")} Використати
+        </button>
+        <button class="compact-button" type="button" data-edit-purchase-template="${template.template_id}">
+          ${icon("edit")} Редагувати
+        </button>
+        <button class="compact-button" type="button" data-delete-purchase-template="${template.template_id}">
+          ${icon("trash")} Видалити
+        </button>
+      </div>
+    </article>
+  `;
+}
+
+export function renderRequestsView(context = {}) {
   const {
     familyMode = false,
     familyLabel = "Сімейний простір",
     purchaseRequests = [],
+    requestTemplates = [],
     unreadActivityCount = 0,
   } = context;
-  const grouped = state.shopping.reduce((groups, item) => {
-    groups[item.category] ||= [];
-    groups[item.category].push(item);
-    return groups;
-  }, {});
 
-  const completed = state.shopping.filter((item) => item.checked).length;
-  const percent = state.shopping.length ? Math.round((completed / state.shopping.length) * 100) : 0;
-  const groupsMarkup = Object.entries(grouped)
-    .map(
-      ([category, items]) => {
-        const sortedItems = [...items].sort(
-          (left, right) =>
-            Number(left.checked) - Number(right.checked) ||
-            Number(right.urgent) - Number(left.urgent) ||
-            left.name.localeCompare(right.name, "uk"),
-        );
-
-        return `
-        <section class="shopping-group">
-          <h2 class="shopping-group-title">${category}<span>${formatMoney(items.reduce((sum, item) => sum + item.price, 0))}</span></h2>
-          <div class="shopping-list">
-            ${sortedItems
-              .map(
-                (item) => `
-                  <label class="shopping-item ${item.checked ? "checked" : ""}">
-                    <input class="custom-checkbox" type="checkbox" data-shopping-id="${item.id}" ${item.checked ? "checked" : ""} />
-                    <span class="shopping-item-copy">
-                      <strong>
-                        ${escapeHtml(item.name)}
-                        ${item.urgent && !item.checked ? '<span class="urgent-label">для вечері</span>' : ""}
-                      </strong>
-                      <span>${escapeHtml(item.amount)}</span>
-                    </span>
-                    <span class="item-price">${formatMoney(item.price)}</span>
-                  </label>
-                `,
-              )
-              .join("")}
-          </div>
-        </section>
-      `;
-      },
-    )
-    .join("");
-  const purchaseRequestsMarkup = purchaseRequests.length
+  const activeRequestsMarkup = purchaseRequests.length
     ? purchaseRequests.map(renderPurchaseRequestCard).join("")
     : `
       <div class="empty-state purchase-request-empty">
         <span class="empty-state-emoji">🧾</span>
-        <h3>Запитів поки немає</h3>
-        <p>Створи запит зі спільного списку, щоб домовитися, хто саме купує продукти.</p>
+        <h3>Заявок поки немає</h3>
+        <p>Створи першу заявку на продукти або перевикористай шаблон.</p>
       </div>
     `;
-  const familyRequestsSection = familyMode
-    ? `
-      <section class="section purchase-requests-section">
-        <div class="section-header">
-          <div>
-            <p class="eyebrow">${escapeHtml(familyLabel)}</p>
-            <h2 class="section-title">Запити на покупки</h2>
-          </div>
-          <button class="compact-button purchase-history-button" type="button" data-open-family-activity>
-            ${icon("history")} Дії
-            <span class="activity-pill" data-family-activity-badge ${unreadActivityCount ? "" : "hidden"}>${unreadActivityCount}</span>
-          </button>
-        </div>
-        <div class="purchase-request-toolbar">
-          <button class="compact-button primary add-item-button" type="button" data-create-purchase-request>
-            ${icon("plus")} Створити запит
-          </button>
-        </div>
-        <div class="purchase-request-list">${purchaseRequestsMarkup}</div>
-      </section>
-    `
+
+  const templatesMarkup = requestTemplates.length
+    ? requestTemplates.map(renderPurchaseTemplateCard).join("")
     : `
-      <div class="alternative-card family-readonly-card purchase-request-info">
-        <strong>Запити на покупки працюють у сімейному просторі</strong>
-        <p>Перемкнись на сімейну групу, щоб передавати покупки між учасниками й бачити історію виконання.</p>
+      <div class="empty-state purchase-request-empty">
+        <span class="empty-state-emoji">🗂️</span>
+        <h3>Шаблонів поки немає</h3>
+        <p>Збережи типову заявку, щоб повторювати її в один дотик.</p>
       </div>
     `;
+
+  if (!familyMode) {
+    return `
+      <section class="screen">
+        <div class="screen-heading-row">
+          <div>
+            <p class="eyebrow">Заявки</p>
+            <h1 class="screen-title">Покупки для сім'ї</h1>
+          </div>
+        </div>
+        <div class="alternative-card family-readonly-card purchase-request-info">
+          <strong>Заявки доступні у сімейному просторі</strong>
+          <p>Перемкнись на сімейну групу, щоб вести спільні заявки, статуси покупки та шаблони.</p>
+        </div>
+      </section>
+    `;
+  }
 
   return `
     <section class="screen">
       <div class="screen-heading-row">
         <div>
-          <p class="eyebrow">Розумний кошик</p>
-          <h1 class="screen-title">Список покупок</h1>
+          <p class="eyebrow">${escapeHtml(familyLabel)}</p>
+          <h1 class="screen-title">Заявки на продукти</h1>
         </div>
-        <span class="date-label">${formatMoney(shoppingTotal(state))}</span>
+        <span class="date-label">${purchaseRequests.length} активних</span>
       </div>
 
-      <article class="shopping-summary">
-        <div class="progress-ring" style="--progress: ${percent * 3.6}deg">
-          <strong>${percent}%</strong>
-        </div>
-        <div class="shopping-summary-copy">
-          <strong>${completed} з ${state.shopping.length} уже в кошику</strong>
-          <span>Куплено на ${formatMoney(checkedTotal(state))}</span>
-        </div>
-        <button class="remind-button" type="button" data-remind aria-label="Нагадати про покупки">
-          ${icon("bell")}
+      <div class="purchase-request-toolbar">
+        <button class="compact-button primary add-item-button" type="button" data-create-purchase-request>
+          ${icon("plus")} Нова заявка
         </button>
-      </article>
-
-      <div class="shopping-toolbar">
-        <button class="compact-button primary add-item-button" type="button" data-add-item>
-          ${icon("plus")} Додати продукт
+        <button class="compact-button" type="button" data-create-purchase-template>
+          ${icon("save")} Новий шаблон
         </button>
-        <button class="compact-button" type="button" data-clear-checked>Прибрати куплене</button>
+        <button class="compact-button purchase-history-button" type="button" data-open-family-activity>
+          ${icon("history")} Дії
+          <span class="activity-pill" data-family-activity-badge ${unreadActivityCount ? "" : "hidden"}>${unreadActivityCount}</span>
+        </button>
       </div>
 
-      ${familyRequestsSection}
+      <section class="section purchase-requests-section">
+        <div class="section-header">
+          <div>
+            <p class="eyebrow">Активні</p>
+            <h2 class="section-title">Поточні заявки</h2>
+          </div>
+          <span class="date-label">${purchaseRequests.length}</span>
+        </div>
+        <div class="purchase-request-list">${activeRequestsMarkup}</div>
+      </section>
 
-      ${
-        state.shopping.length
-          ? groupsMarkup
-          : `
-            <div class="empty-state">
-              <span class="empty-state-emoji">🧺</span>
-              <h3>Список порожній</h3>
-              <p>Додай продукт вручну або сформуй список із меню.</p>
-              <button class="compact-button primary" type="button" data-generate-list>Зібрати з меню</button>
-            </div>
-          `
-      }
+      <section class="section purchase-requests-section">
+        <div class="section-header">
+          <div>
+            <p class="eyebrow">Повторне використання</p>
+            <h2 class="section-title">Збережені шаблони</h2>
+          </div>
+          <span class="date-label">${requestTemplates.length}</span>
+        </div>
+        <div class="purchase-request-list">${templatesMarkup}</div>
+      </section>
     </section>
   `;
 }
 
 export function renderPantryView(state) {
+  const lowCount = state.pantry.filter((item) => item.low).length;
+
   return `
     <section class="screen">
       <div class="screen-heading-row">
         <div>
-          <p class="eyebrow">Що є вдома</p>
-          <h1 class="screen-title">Мої запаси</h1>
+          <p class="eyebrow">Інгредієнти</p>
+          <h1 class="screen-title">Запаси й банк</h1>
         </div>
-        <span class="date-label">${state.pantry.length} продуктів</span>
+        <span class="date-label">${state.pantry.length} у запасах</span>
       </div>
       <label class="pantry-search">
         ${icon("search")}
-        <input id="pantrySearch" type="search" placeholder="Знайти продукт" autocomplete="off" />
+        <input id="pantrySearch" type="search" placeholder="Знайти інгредієнт" autocomplete="off" />
       </label>
       <div class="optimization-card">
         <span class="optimization-icon">${icon("spark")}</span>
         <div>
-          <strong>${state.pantry.filter((item) => item.low).length} продукти закінчуються</strong>
-          <p>Я врахую це у наступному списку й спершу використаю те, що вже є.</p>
+          <strong>${lowCount} ${pluralize(lowCount, "позиція", "позиції", "позицій")} закінчується</strong>
+          <p>Наявність у запасах одразу впливає на те, які рецепти можна приготувати без докупівель.</p>
         </div>
       </div>
       <button class="catalog-open-button" type="button" data-open-product-catalog>
         <span class="catalog-open-icon">🧺</span>
         <span>
-          <strong>Каталог продуктів</strong>
-          <small>${state.productCatalog.length} базових продуктів для швидкого додавання</small>
+          <strong>Банк інгредієнтів</strong>
+          <small>${state.productCatalog.length} базових позицій для швидкого поповнення запасів і заявок</small>
         </span>
         ${icon("arrow")}
       </button>

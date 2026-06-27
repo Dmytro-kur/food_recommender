@@ -30,6 +30,11 @@ export function isFamilyPurchaseRequestsUnavailable(error) {
     "list_family_purchase_requests",
     "get_family_purchase_request_details",
     "update_family_purchase_request_item",
+    "delete_family_purchase_request",
+    "list_family_purchase_request_templates",
+    "get_family_purchase_request_template_details",
+    "upsert_family_purchase_request_template",
+    "delete_family_purchase_request_template",
   ]);
 }
 
@@ -113,10 +118,6 @@ export function listFamilyNotificationHistory(client, targetFamilyId, limitCount
   });
 }
 
-export function pushFamilyNotificationEvent(client, payload) {
-  return client.rpc("push_family_notification_event", payload);
-}
-
 export function listFamilyPurchaseRequests(client, targetFamilyId) {
   return client.rpc("list_family_purchase_requests", {
     target_family_id: targetFamilyId,
@@ -135,4 +136,32 @@ export function getFamilyPurchaseRequestDetails(client, requestId) {
 
 export function updateFamilyPurchaseRequestItem(client, payload) {
   return client.rpc("update_family_purchase_request_item", payload);
+}
+
+export function deleteFamilyPurchaseRequest(client, requestId) {
+  return client.rpc("delete_family_purchase_request", {
+    target_request_id: requestId,
+  });
+}
+
+export function listFamilyPurchaseRequestTemplates(client, targetFamilyId) {
+  return client.rpc("list_family_purchase_request_templates", {
+    target_family_id: targetFamilyId,
+  });
+}
+
+export function getFamilyPurchaseRequestTemplateDetails(client, templateId) {
+  return client.rpc("get_family_purchase_request_template_details", {
+    target_template_id: templateId,
+  });
+}
+
+export function upsertFamilyPurchaseRequestTemplate(client, payload) {
+  return client.rpc("upsert_family_purchase_request_template", payload);
+}
+
+export function deleteFamilyPurchaseRequestTemplate(client, templateId) {
+  return client.rpc("delete_family_purchase_request_template", {
+    target_template_id: templateId,
+  });
 }

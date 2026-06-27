@@ -10,7 +10,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "check": "node --check app.js && node --check db.js && node --check neon.js && node --check public/sw.js"
+    "check": "node --check app.js && node --check db.js && node --check neon.js && node --check public/sw.js && node --check scripts/build-neon-schema.mjs",
+    "db:build-schema": "node scripts/build-neon-schema.mjs"
   },
   "dependencies": {
     "@neondatabase/neon-js": "0.6.2-beta"

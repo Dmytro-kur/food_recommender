@@ -127,7 +127,7 @@ export function createFamilyController(deps) {
       return `
         <div class="alternative-card family-readonly-card">
           <strong>Поки без сімейної групи</strong>
-          <p>Створи групу, якщо хочеш ділити меню, рецепти, запаси та список покупок з родиною.</p>
+          <p>Створи групу, якщо хочеш ділити рецепти, запаси й заявки на продукти з родиною.</p>
         </div>
       `;
     }
@@ -271,7 +271,7 @@ export function createFamilyController(deps) {
         <div class="sheet-header">
           <div>
             <h2 id="modalTitle">Сімейні групи</h2>
-            <p>Учасники однієї групи бачать спільні меню, рецепти, запаси й покупки.</p>
+            <p>Учасники однієї групи бачать спільні рецепти, запаси й заявки на продукти.</p>
           </div>
           <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
         </div>

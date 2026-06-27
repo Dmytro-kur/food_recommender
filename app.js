@@ -9,39 +9,31 @@ import {
   listFamilyGroups,
   listFamilyNotificationEvents,
   listFamilyPurchaseRequests,
-  pushFamilyNotificationEvent,
+  listFamilyPurchaseRequestTemplates,
 } from "./app/familyApi.js";
 import { createFamilyController } from "./app/familyController.js";
 import { createMenuController } from "./app/menuController.js";
 import { createPurchaseRequestController } from "./app/purchaseRequests.js";
-import { pluralize } from "./app/utils.js";
-import { categoryEmoji, formatMoney } from "./app/ui.js";
 import {
   renderAccessScreenMarkup,
   renderAuthScreenMarkup,
   renderConfigurationScreenMarkup,
-  renderHomeView,
-  renderMenuView,
+  renderRecipesView,
+  renderRequestsView,
   renderPantryView,
-  renderShoppingView,
 } from "./app/views.js";
 import {
   findCatalogProduct as findCatalogProductInCatalog,
   sameProduct as sameProductInCatalog,
   linkStateProducts,
   hydrateState,
-  normalizeMeal,
+  normalizeRecipe,
   mergeSharedState,
   areStatesEqual,
-  remainingItems as getRemainingItems,
   parseIngredients as parseStateIngredients,
-  findPantryIngredient as findStatePantryIngredient,
   syncIngredientAvailability as syncStateIngredientAvailability,
-  consumePantryAmount as consumeStatePantryAmount,
   inferCategory as inferStateCategory,
   estimatePrice as estimateStatePrice,
-  syncMealDates as syncStateMealDates,
-  getAlternativeText,
 } from "./app/state.js";
 
 let state = structuredClone(defaultState);
@@ -64,6 +56,8 @@ let lastSeenFamilyNotificationEventId = 0;
 let displayedFamilyNotificationKeys = new Map();
 let familyPurchaseRequests = [];
 let familyPurchaseRequestsSignature = "[]";
+let familyPurchaseRequestTemplates = [];
+let familyPurchaseRequestTemplatesSignature = "[]";
 let unreadFamilyActivityCount = 0;
 let authFormMode = "sign-in";
 let isBootstrapping = false;
@@ -72,7 +66,7 @@ const app = document.querySelector("#app");
 const modalBackdrop = document.querySelector("#modalBackdrop");
 const modalSheet = document.querySelector("#modalSheet");
 const toast = document.querySelector("#toast");
-const shoppingBadge = document.querySelector("#shoppingBadge");
+const requestsBadge = document.querySelector("#requestsBadge");
 const CLOUD_SYNC_INTERVAL_MS = 4000;
 const FAMILY_NOTIFICATION_POLL_LIMIT = 20;
 const FAMILY_NOTIFICATION_DISPLAY_COOLDOWN_MS = 90_000;
@@ -86,24 +80,12 @@ function sameProduct(left, right) {
   return sameProductInCatalog(left, right, state.productCatalog);
 }
 
-function remainingItems() {
-  return getRemainingItems(state);
-}
-
 function parseIngredients(value) {
   return parseStateIngredients(value, state);
 }
 
-function findPantryIngredient(target) {
-  return findStatePantryIngredient(target, state.pantry, state.productCatalog);
-}
-
 function syncIngredientAvailability() {
   syncStateIngredientAvailability(state);
-}
-
-function consumePantryAmount(itemId, usedAmount) {
-  consumeStatePantryAmount(state, itemId, usedAmount);
 }
 
 function inferCategory(target) {
@@ -114,8 +96,10 @@ function estimatePrice(target) {
   return estimateStatePrice(target, state.productCatalog);
 }
 
-function syncMealDates() {
-  syncStateMealDates(state);
+function normalizeRequestedView(view) {
+  if (view === "pantry") return "pantry";
+  if (view === "shopping" || view === "requests") return "requests";
+  return "recipes";
 }
 
 function isNormalizedCloudUnavailable(error) {
@@ -161,10 +145,6 @@ function getCurrentScopeLabel() {
   return activeFamilyGroup?.family_name || "Особистий простір";
 }
 
-function getCurrentUserLabel() {
-  return currentUser?.name?.trim() || currentUser?.email?.trim() || "Хтось";
-}
-
 function getSyncIndicatorLabel(status = "synced") {
   if (!currentUser) return "Локальний режим";
   return status === "offline" ? `${getCurrentScopeLabel()} · офлайн-копія` : `${getCurrentScopeLabel()} · синхронізовано`;
@@ -194,8 +174,21 @@ function setFamilyPurchaseRequests(nextRequests = []) {
   return changed;
 }
 
+function setFamilyPurchaseRequestTemplates(nextTemplates = []) {
+  const normalized = Array.isArray(nextTemplates) ? nextTemplates : [];
+  const nextSignature = JSON.stringify(normalized);
+  const changed = nextSignature !== familyPurchaseRequestTemplatesSignature;
+  familyPurchaseRequestTemplates = normalized;
+  familyPurchaseRequestTemplatesSignature = nextSignature;
+  return changed;
+}
+
 function clearFamilyPurchaseRequests() {
   setFamilyPurchaseRequests([]);
+}
+
+function clearFamilyPurchaseRequestTemplates() {
+  setFamilyPurchaseRequestTemplates([]);
 }
 
 function resetFamilyNotificationState() {
@@ -211,8 +204,8 @@ function updateFamilyActivityBadge() {
   badge.textContent = unreadFamilyActivityCount > 99 ? "99+" : String(unreadFamilyActivityCount);
 }
 
-function renderShoppingViewIfVisible() {
-  if (state.activeView === "shopping" && modalBackdrop.hidden && !document.body.classList.contains("auth-mode")) {
+function renderRequestsViewIfVisible() {
+  if (state.activeView === "requests" && modalBackdrop.hidden && !document.body.classList.contains("auth-mode")) {
     render();
   }
 }
@@ -222,32 +215,23 @@ function clearUnreadFamilyActivity() {
   updateFamilyActivityBadge();
 }
 
-function canUseFamilyCloud() {
-  return Boolean(neonClient && currentUser && accessProfile?.status === "active");
-}
-
 function getCurrentStateSnapshot(source = state) {
   const snapshot = linkStateProducts(structuredClone(source));
   delete snapshot.activeView;
-  delete snapshot.selectedDay;
   return snapshot;
 }
 
 function restoreUiState(nextState, uiState) {
-  if (availableViews.includes(uiState.activeView)) {
-    nextState.activeView = uiState.activeView;
+  const requestedView = normalizeRequestedView(uiState.activeView);
+  if (availableViews.includes(requestedView)) {
+    nextState.activeView = requestedView;
   }
-  nextState.selectedDay = Math.min(
-    Math.max(Number(uiState.selectedDay) || 0, 0),
-    Math.max(nextState.meals.length - 1, 0),
-  );
 }
 
 function applyStateSnapshot(snapshot, { preserveUi = false, scheduleCloud = false, markDirty = false } = {}) {
   const uiState = preserveUi
     ? {
         activeView: state.activeView,
-        selectedDay: state.selectedDay,
       }
     : null;
 
@@ -255,7 +239,6 @@ function applyStateSnapshot(snapshot, { preserveUi = false, scheduleCloud = fals
   if (uiState) {
     restoreUiState(state, uiState);
   }
-  syncMealDates();
   syncIngredientAvailability();
   hasPendingCloudChanges = markDirty;
   skipNextCloudSave = !scheduleCloud;
@@ -474,7 +457,7 @@ async function primeFamilyNotificationCursor() {
 async function refreshFamilyPurchaseRequests({ renderIfChanged = false } = {}) {
   if (!neonClient || !currentUser || accessProfile?.status !== "active" || isPersonalScope()) {
     const changed = setFamilyPurchaseRequests([]);
-    if (changed && renderIfChanged) renderShoppingViewIfVisible();
+    if (changed && renderIfChanged) renderRequestsViewIfVisible();
     return;
   }
 
@@ -483,14 +466,36 @@ async function refreshFamilyPurchaseRequests({ renderIfChanged = false } = {}) {
   if (result.error) {
     if (isFamilyPurchaseRequestsUnavailable(result.error)) {
       const changed = setFamilyPurchaseRequests([]);
-      if (changed && renderIfChanged) renderShoppingViewIfVisible();
+      if (changed && renderIfChanged) renderRequestsViewIfVisible();
       return;
     }
     throw result.error;
   }
 
   const changed = setFamilyPurchaseRequests(result.data || []);
-  if (changed && renderIfChanged) renderShoppingViewIfVisible();
+  if (changed && renderIfChanged) renderRequestsViewIfVisible();
+}
+
+async function refreshFamilyPurchaseRequestTemplates({ renderIfChanged = false } = {}) {
+  if (!neonClient || !currentUser || accessProfile?.status !== "active" || isPersonalScope()) {
+    const changed = setFamilyPurchaseRequestTemplates([]);
+    if (changed && renderIfChanged) renderRequestsViewIfVisible();
+    return;
+  }
+
+  const result = await listFamilyPurchaseRequestTemplates(neonClient, getActiveFamilyId());
+
+  if (result.error) {
+    if (isFamilyPurchaseRequestsUnavailable(result.error)) {
+      const changed = setFamilyPurchaseRequestTemplates([]);
+      if (changed && renderIfChanged) renderRequestsViewIfVisible();
+      return;
+    }
+    throw result.error;
+  }
+
+  const changed = setFamilyPurchaseRequestTemplates(result.data || []);
+  if (changed && renderIfChanged) renderRequestsViewIfVisible();
 }
 
 async function loadCloudState(userId, targetFamilyId = getActiveFamilyId()) {
@@ -584,10 +589,7 @@ async function loadStateForCurrentScope({ seedSnapshot = null } = {}) {
   const fallbackSaved = isPersonalScope(targetFamilyId) ? legacyUserLocalSaved || legacySaved || loadLegacyState() : null;
   const seededSnapshot = !cloudSaved.state && !scopedLocalSaved && !fallbackSaved && seedSnapshot ? structuredClone(seedSnapshot) : null;
   const saved = cloudSaved.state || scopedLocalSaved || fallbackSaved || seededSnapshot;
-  const initialView = window.location.hash.slice(1);
-  if (availableViews.includes(initialView)) {
-    state.activeView = initialView;
-  }
+  state.activeView = normalizeRequestedView(window.location.hash.slice(1) || state.activeView);
   applyStateSnapshot(saved, {
     preserveUi: true,
     scheduleCloud: false,
@@ -689,7 +691,7 @@ function buildFamilyNotificationSummary(events) {
       title: latest.title,
       body: `${latest.family_name ? `${latest.family_name}: ` : ""}${latest.body}`,
       tag: `family-event-${latest.event_id}`,
-      url: latest.url || "#home",
+      url: latest.url || "#requests",
     };
   }
 
@@ -697,7 +699,7 @@ function buildFamilyNotificationSummary(events) {
     title: familyNames.length === 1 ? `${familyNames[0]}: нові зміни` : "Нові сімейні зміни",
     body: `Є ${freshEvents.length} нових оновлень у спільному просторі`,
     tag: `family-event-summary-${latest.event_id}`,
-    url: latest.url || "#home",
+    url: latest.url || "#requests",
   };
 }
 
@@ -737,38 +739,6 @@ async function syncSharedNotifications() {
   showToast(summary.body);
 }
 
-async function publishFamilyNotification({
-  eventType,
-  title,
-  body,
-  url = "#home",
-  dedupeKey = eventType,
-  cooldownSeconds = 120,
-}) {
-  if (!neonClient || !currentUser || accessProfile?.status !== "active") return;
-
-  const targetFamilyId = getActiveFamilyId();
-  if (targetFamilyId === null) return;
-
-  try {
-    const result = await pushFamilyNotificationEvent(neonClient, {
-      target_family_id: targetFamilyId,
-      event_type: eventType,
-      title,
-      body,
-      url,
-      dedupe_key: dedupeKey,
-      cooldown_seconds: cooldownSeconds,
-    });
-
-    if (result.error && !isFamilyNotificationsUnavailable(result.error)) {
-      throw result.error;
-    }
-  } catch {
-    // Shared notifications are best-effort and should not block local changes.
-  }
-}
-
 function requestCloudSync(reason = "manual") {
   if (!neonClient || !currentUser || accessProfile?.status !== "active") return;
 
@@ -797,6 +767,14 @@ function requestCloudSync(reason = "manual") {
       });
     } catch {
       // Purchase request polling should not break the main app loop.
+    }
+
+    try {
+      await refreshFamilyPurchaseRequestTemplates({
+        renderIfChanged: !document.hidden,
+      });
+    } catch {
+      // Template polling should not break the main app loop.
     }
   })()
     .finally(() => {
@@ -890,6 +868,7 @@ async function signOut() {
   clearCloudSnapshot();
   cloudStateExists = false;
   clearFamilyPurchaseRequests();
+  clearFamilyPurchaseRequestTemplates();
   resetFamilyNotificationState();
   authFormMode = "sign-in";
   renderAuthScreen();
@@ -905,13 +884,13 @@ function updateSyncIndicator(status) {
 function render() {
   document.body.classList.remove("auth-mode");
   const renderers = {
-    home: () => renderHomeView(state),
-    menu: () => renderMenuView(state, currentUser, getSyncIndicatorLabel("synced")),
-    shopping: () =>
-      renderShoppingView(state, {
+    recipes: () => renderRecipesView(state, currentUser, getSyncIndicatorLabel("synced")),
+    requests: () =>
+      renderRequestsView({
         familyMode: Boolean(currentUser && !isPersonalScope()),
         familyLabel: getCurrentScopeLabel(),
         purchaseRequests: familyPurchaseRequests,
+        requestTemplates: familyPurchaseRequestTemplates,
         unreadActivityCount: unreadFamilyActivityCount,
       }),
     pantry: () => renderPantryView(state),
@@ -921,52 +900,23 @@ function render() {
   document.querySelectorAll(".nav-item").forEach((button) => {
     button.classList.toggle("active", button.dataset.view === state.activeView);
   });
-  shoppingBadge.textContent = remainingItems().length;
-  shoppingBadge.hidden = remainingItems().length === 0;
+  if (requestsBadge) {
+    requestsBadge.textContent = String(familyPurchaseRequests.length);
+    requestsBadge.hidden = familyPurchaseRequests.length === 0;
+  }
   bindViewEvents();
   updateFamilyActivityBadge();
   saveState();
 }
 
 function bindViewEvents() {
-  document.querySelectorAll("[data-priority]").forEach((button) => {
-    button.addEventListener("click", () => {
-      state.priority = button.dataset.priority;
-      render();
-      showToast(`Пріоритет: ${button.textContent.trim()}`);
-    });
-  });
-
   document.querySelectorAll("[data-view-link]").forEach((button) => {
     button.addEventListener("click", () => switchView(button.dataset.viewLink));
   });
 
-  document.querySelectorAll("[data-open-meal]").forEach((button) => {
-    button.addEventListener("click", () => openMeal(Number(button.dataset.openMeal)));
-  });
   document.querySelectorAll("[data-open-recipe]").forEach((button) => {
-    button.addEventListener("click", () => openMeal(Number(button.dataset.openRecipe)));
+    button.addEventListener("click", () => openRecipe(Number(button.dataset.openRecipe)));
   });
-  document.querySelectorAll("[data-use-recipe]").forEach((button) => {
-    button.addEventListener("click", () => openUseRecipeModal(Number(button.dataset.useRecipe)));
-  });
-
-  document.querySelectorAll("[data-add-missing]").forEach((button) => {
-    button.addEventListener("click", () => addMissingIngredients(Number(button.dataset.addMissing)));
-  });
-
-  document.querySelectorAll("[data-day-index]").forEach((button) => {
-    button.addEventListener("click", () => {
-      state.selectedDay = Number(button.dataset.dayIndex);
-      render();
-    });
-  });
-
-  document.querySelectorAll("[data-swap-meal]").forEach((button) => {
-    button.addEventListener("click", () => swapMeal(Number(button.dataset.swapMeal)));
-  });
-
-  document.querySelector("[data-swap-today]")?.addEventListener("click", () => swapMeal(state.meals[0].id));
   document.querySelectorAll("[data-add-recipe]").forEach((button) => {
     button.addEventListener("click", () => openRecipeForm());
   });
@@ -977,23 +927,29 @@ function bindViewEvents() {
     button.addEventListener("click", () => openDeleteRecipeModal(Number(button.dataset.deleteRecipe)));
   });
 
-  document.querySelectorAll("[data-shopping-id]").forEach((checkbox) => {
-    checkbox.addEventListener("change", () => toggleShoppingItem(Number(checkbox.dataset.shoppingId), checkbox.checked));
-  });
-
-  document.querySelector("[data-add-item]")?.addEventListener("click", () => openAddItemModal("shopping"));
   document.querySelector("[data-add-pantry]")?.addEventListener("click", () => openAddItemModal("pantry"));
   document.querySelector("[data-open-product-catalog]")?.addEventListener("click", openProductCatalog);
   document.querySelectorAll("[data-edit-pantry]").forEach((button) => {
     button.addEventListener("click", () => openPantryItemModal(Number(button.dataset.editPantry)));
   });
-  document.querySelector("[data-clear-checked]")?.addEventListener("click", clearCheckedItems);
-  document.querySelector("[data-generate-list]")?.addEventListener("click", generateShoppingList);
-  document.querySelector("[data-remind]")?.addEventListener("click", requestShoppingNotification);
-  document.querySelector("[data-create-purchase-request]")?.addEventListener("click", openCreatePurchaseRequestModal);
+  document.querySelector("[data-create-purchase-request]")?.addEventListener("click", () => openCreatePurchaseRequestModal());
+  document.querySelector("[data-create-purchase-template]")?.addEventListener("click", () => openCreatePurchaseTemplateModal());
   document.querySelector("[data-open-family-activity]")?.addEventListener("click", openFamilyActivityModal);
   document.querySelectorAll("[data-open-purchase-request]").forEach((button) => {
     button.addEventListener("click", () => openPurchaseRequestDetails(Number(button.dataset.openPurchaseRequest)));
+  });
+  document.querySelectorAll("[data-reuse-purchase-template]").forEach((button) => {
+    button.addEventListener("click", () => openReusePurchaseTemplateModal(Number(button.dataset.reusePurchaseTemplate)));
+  });
+  document.querySelectorAll("[data-edit-purchase-template]").forEach((button) => {
+    button.addEventListener("click", () => openEditPurchaseTemplateModal(Number(button.dataset.editPurchaseTemplate)));
+  });
+  document.querySelectorAll("[data-delete-purchase-template]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const templateId = Number(button.dataset.deletePurchaseTemplate);
+      const template = familyPurchaseRequestTemplates.find((entry) => entry.template_id === templateId);
+      openDeletePurchaseTemplateModal(templateId, template?.template_title || "Шаблон");
+    });
   });
 
   document.querySelector("#pantrySearch")?.addEventListener("input", (event) => {
@@ -1005,44 +961,12 @@ function bindViewEvents() {
 }
 
 function switchView(view) {
-  state.activeView = view;
-  window.history.replaceState(null, "", `#${view}`);
+  const nextView = normalizeRequestedView(view);
+  state.activeView = nextView;
+  window.history.replaceState(null, "", `#${nextView}`);
   window.scrollTo({ top: 0, behavior: "smooth" });
   render();
   setTimeout(() => app.focus({ preventScroll: true }), 0);
-}
-
-function publishMenuNotification(message) {
-  return publishFamilyNotification({
-    eventType: "menu_updated",
-    title: "Меню оновлено 🍽️",
-    body: `${getCurrentUserLabel()}: ${message}`,
-    url: "#menu",
-    dedupeKey: "menu-updated",
-    cooldownSeconds: 120,
-  });
-}
-
-function publishShoppingProgressNotification(message) {
-  return publishFamilyNotification({
-    eventType: "shopping_progress",
-    title: "Покупки оновлено 🛒",
-    body: `${getCurrentUserLabel()}: ${message}`,
-    url: "#shopping",
-    dedupeKey: "shopping-progress",
-    cooldownSeconds: 180,
-  });
-}
-
-function publishShoppingListNotification(addedCount) {
-  return publishFamilyNotification({
-    eventType: "shopping_list_updated",
-    title: "Список покупок оновлено 🛒",
-    body: `${getCurrentUserLabel()}: додано ${addedCount} ${pluralize(addedCount, "позицію", "позиції", "позицій")} до списку`,
-    url: "#shopping",
-    dedupeKey: "shopping-list-updated",
-    cooldownSeconds: 240,
-  });
 }
 
 // Generic modal and notification primitives are near the end because many features depend on them.
@@ -1063,7 +987,7 @@ function closeModal() {
   modalSheet.innerHTML = "";
 }
 
-async function notifyAction({ title, body, tag, url = "#home", requestPermission = false }) {
+async function notifyAction({ title, body, tag, url = "#requests", requestPermission = false }) {
   if (!("Notification" in window)) return false;
 
   try {
@@ -1100,47 +1024,13 @@ async function notifyAction({ title, body, tag, url = "#home", requestPermission
   }
 }
 
-function resolveNotificationUrl(target = "#home") {
+function resolveNotificationUrl(target = "#requests") {
   const currentUrl = new URL(window.location.href);
   if (target.startsWith("#")) {
     currentUrl.hash = target;
     return currentUrl.href;
   }
   return new URL(target, currentUrl.href).href;
-}
-
-async function requestShoppingNotification() {
-  const count = remainingItems().length;
-  if (!count) {
-    showToast("Список уже виконано — нагадувати нема про що");
-    return;
-  }
-
-  if (!("Notification" in window)) {
-    showToast("Цей браузер не підтримує сповіщення");
-    return;
-  }
-
-  try {
-    const message = `${count} ${pluralize(count, "продукт", "продукти", "продуктів")} · приблизно ${formatMoney(remainingItems().reduce((sum, item) => sum + item.price, 0))}`;
-    const shown = await notifyAction({
-      title: "Не забудь список покупок 🛒",
-      body: message,
-      tag: "shopping-reminder",
-      url: "#shopping",
-      requestPermission: true,
-    });
-
-    if (!shown) {
-      showToast(Notification.permission === "granted" ? "Не вдалося показати сповіщення" : "Дозвіл на сповіщення не надано");
-      return;
-    }
-
-    document.querySelector("#notificationDot").hidden = true;
-    showToast("Нагадування надіслано");
-  } catch {
-    showToast("Не вдалося показати сповіщення");
-  }
 }
 
 function showToast(message) {
@@ -1150,7 +1040,7 @@ function showToast(message) {
   toastTimer = setTimeout(() => toast.classList.remove("visible"), 2400);
 }
 
-// Menu, pantry and local shopping flows are split out so app.js only wires view events.
+// Cookbook and pantry flows are split out so app.js only wires view events.
 const menuController = createMenuController({
   modalSheet,
   getState: () => state,
@@ -1158,35 +1048,23 @@ const menuController = createMenuController({
   findCatalogProduct,
   sameProduct,
   parseIngredients,
-  findPantryIngredient,
   syncIngredientAvailability,
-  consumePantryAmount,
   inferCategory,
   estimatePrice,
-  syncMealDates,
-  normalizeMeal,
-  getAlternativeText,
+  normalizeRecipe,
   openModal,
   closeModal,
   render,
-  saveState,
   showToast,
-  publishMenuNotification,
-  publishShoppingListNotification,
 });
 
 const {
-  openUseRecipeModal,
   openProductCatalog,
   openPantryItemModal,
-  addMissingIngredients,
-  swapMeal,
   openRecipeForm,
   openDeleteRecipeModal,
-  openMeal,
+  openRecipe,
   openAddItemModal,
-  clearCheckedItems,
-  generateShoppingList,
 } = menuController;
 
 // Family/account flow is split out so app.js can stay focused on data lifecycle.
@@ -1202,7 +1080,10 @@ const familyController = createFamilyController({
   refreshFamilyContext,
   loadStateForCurrentScope,
   primeFamilyNotificationCursor,
-  refreshFamilyPurchaseRequests,
+  refreshFamilyPurchaseRequests: async (options = {}) => {
+    await refreshFamilyPurchaseRequests(options);
+    await refreshFamilyPurchaseRequestTemplates(options);
+  },
   openModal,
   closeModal,
   showToast,
@@ -1216,30 +1097,29 @@ const purchaseRequestController = createPurchaseRequestController({
   neonClient,
   modalSheet,
   getState: () => state,
-  sameProduct,
-  categoryEmoji,
-  syncIngredientAvailability,
-  render,
+  findCatalogProduct: findCatalogProductInCatalog,
+  inferCategory: inferStateCategory,
+  estimatePrice: estimateStatePrice,
   showToast,
   openModal,
   closeModal,
   isPersonalScope,
-  remainingItems,
   getCurrentScopeLabel,
   getActiveFamilyId,
   refreshFamilyPurchaseRequests,
-  renderShoppingViewIfVisible,
-  canUseFamilyCloud,
-  getFamilyPurchaseRequests: () => familyPurchaseRequests,
+  refreshFamilyPurchaseRequestTemplates,
+  renderRequestsViewIfVisible,
   clearUnreadFamilyActivity,
-  publishShoppingProgressNotification,
 });
 
 const {
   openCreatePurchaseRequestModal,
+  openCreatePurchaseTemplateModal,
   openFamilyActivityModal,
   openPurchaseRequestDetails,
-  toggleShoppingItem,
+  openEditPurchaseTemplateModal,
+  openDeletePurchaseTemplateModal,
+  openReusePurchaseTemplateModal,
 } = purchaseRequestController;
 
 // Bootstrap is the final entrypoint so startup rules are readable in one place.
@@ -1259,6 +1139,7 @@ async function bootstrap() {
       stopCloudSyncLoop();
       clearCloudSnapshot();
       clearFamilyPurchaseRequests();
+      clearFamilyPurchaseRequestTemplates();
       resetFamilyNotificationState();
       if (!localMode) {
         renderConfigurationScreen();
@@ -1270,11 +1151,7 @@ async function bootstrap() {
       currentUser = null;
       accessProfile = null;
       setFamilyContext();
-      const hashView = window.location.hash.slice(1);
-      if (availableViews.includes(hashView)) {
-        state.activeView = hashView;
-      }
-      syncMealDates();
+      state.activeView = normalizeRequestedView(window.location.hash.slice(1) || state.activeView);
       syncIngredientAvailability();
       render();
       return;
@@ -1286,6 +1163,7 @@ async function bootstrap() {
       stopCloudSyncLoop();
       clearCloudSnapshot();
       clearFamilyPurchaseRequests();
+      clearFamilyPurchaseRequestTemplates();
       resetFamilyNotificationState();
       currentUser = null;
       accessProfile = null;
@@ -1300,6 +1178,7 @@ async function bootstrap() {
       stopCloudSyncLoop();
       clearCloudSnapshot();
       clearFamilyPurchaseRequests();
+      clearFamilyPurchaseRequestTemplates();
       resetFamilyNotificationState();
       setFamilyContext();
       renderAccessScreen(accessProfile || { status: "pending" });
@@ -1311,6 +1190,7 @@ async function bootstrap() {
     await loadStateForCurrentScope();
     await primeFamilyNotificationCursor();
     await refreshFamilyPurchaseRequests();
+    await refreshFamilyPurchaseRequestTemplates();
     startCloudSyncLoop();
   } catch (error) {
     if (currentUser) {
@@ -1327,7 +1207,7 @@ document.querySelectorAll(".nav-item").forEach((button) => {
   button.addEventListener("click", () => switchView(button.dataset.view));
 });
 
-document.querySelector(".brand").addEventListener("click", () => switchView("home"));
+document.querySelector(".brand").addEventListener("click", () => switchView("recipes"));
 document.querySelector("#accountButton").addEventListener("click", openAccountModal);
 modalBackdrop.addEventListener("click", (event) => {
   if (event.target === modalBackdrop) closeModal();
@@ -1336,7 +1216,7 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && !modalBackdrop.hidden) closeModal();
 });
 window.addEventListener("hashchange", () => {
-  const view = window.location.hash.slice(1);
+  const view = normalizeRequestedView(window.location.hash.slice(1));
   if (availableViews.includes(view) && view !== state.activeView) {
     state.activeView = view;
     render();

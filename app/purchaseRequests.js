@@ -4,133 +4,102 @@ import {
   formatFamilyDateTime,
   getPurchaseItemStatusClass,
   getPurchaseRequestStatusClass,
-  isActivePurchaseRequestStatus,
 } from "./family.js";
 import {
   createFamilyPurchaseRequest,
+  deleteFamilyPurchaseRequest,
+  deleteFamilyPurchaseRequestTemplate,
   getFamilyNotificationsErrorMessage,
   getFamilyPurchaseRequestsErrorMessage,
   getFamilyPurchaseRequestDetails,
-  isFamilyPurchaseRequestsUnavailable,
+  getFamilyPurchaseRequestTemplateDetails,
   listFamilyNotificationHistory,
   updateFamilyPurchaseRequestItem,
+  upsertFamilyPurchaseRequestTemplate,
 } from "./familyApi.js";
-import { escapeHtml } from "./utils.js";
+import { escapeHtml, parseLines } from "./utils.js";
 import { formatMoney, icon } from "./ui.js";
 
-// The controller gets app-specific callbacks injected so purchase-request flow
-// stays isolated without owning the global application state.
 export function createPurchaseRequestController(deps) {
   const {
     neonClient,
     modalSheet,
     getState,
-    sameProduct,
-    categoryEmoji,
-    syncIngredientAvailability,
-    render,
+    findCatalogProduct,
+    inferCategory,
+    estimatePrice,
     showToast,
     openModal,
     closeModal,
     isPersonalScope,
-    remainingItems,
     getCurrentScopeLabel,
     getActiveFamilyId,
     refreshFamilyPurchaseRequests,
-    renderShoppingViewIfVisible,
-    canUseFamilyCloud,
-    getFamilyPurchaseRequests,
+    refreshFamilyPurchaseRequestTemplates,
+    renderRequestsViewIfVisible,
     clearUnreadFamilyActivity,
-    publishShoppingProgressNotification,
   } = deps;
 
-  function findShoppingItemForRequestItem(requestItem, { includeChecked = false } = {}) {
-    const state = getState();
-    const directItemId = Number(requestItem?.shopping_item_id);
-    if (Number.isInteger(directItemId)) {
-      const directMatch = state.shopping.find((entry) => entry.id === directItemId);
-      if (directMatch && (includeChecked || !directMatch.checked)) return directMatch;
-    }
-
-    const target = {
-      name: requestItem?.item_name,
-      productId: requestItem?.product_id ?? null,
-    };
-
-    return (
-      state.shopping.find((entry) => (includeChecked || !entry.checked) && sameProduct(entry, target)) ||
-      state.shopping.find(
-        (entry) =>
-          (includeChecked || !entry.checked) &&
-          entry.name.trim().toLowerCase() === String(requestItem?.item_name || "").trim().toLowerCase(),
-      ) ||
-      null
-    );
+  function normalizeRequestItems(items = []) {
+    return items
+      .map((item, index) => ({
+        id: item.id || index + 1,
+        name: String(item.name || item.item_name || "").trim(),
+        amount: String(item.amount || "за смаком").trim() || "за смаком",
+        category: String(item.category || "Інше").trim() || "Інше",
+        price: Math.max(Number(item.price ?? item.expected_price) || 0, 0),
+        productId: item.productId ?? item.product_id ?? null,
+      }))
+      .filter((item) => item.name);
   }
 
-  function ensurePantryContainsShoppingItem(item) {
-    const state = getState();
-    if (state.pantry.some((pantryItem) => sameProduct(pantryItem, item))) return false;
-
-    state.pantry.push({
-      id: Date.now(),
-      name: item.name,
-      amount: item.amount,
-      emoji: categoryEmoji(item.category),
-      low: false,
-      productId: item.productId ?? null,
-    });
-
-    return true;
+  function serializeRequestItems(items = []) {
+    return items
+      .map((item) => `${item.name} | ${item.amount} | ${item.category} | ${item.price || 0}`)
+      .join("\n");
   }
 
-  // Shopping items are the source of truth for local UI, so purchase requests sync to them.
-  function updateLocalShoppingItemState(item, checked) {
-    item.checked = checked;
-    if (checked) {
-      ensurePantryContainsShoppingItem(item);
-    }
-    syncIngredientAvailability();
+  function parseRequestItems(text) {
+    return parseLines(text)
+      .map((line) => {
+        const [rawName, rawAmount = "", rawCategory = "", rawPrice = ""] = line.split("|");
+        const name = rawName.trim();
+        if (!name) return null;
+
+        const catalogMatch = findCatalogProduct(name, getState().productCatalog);
+        const amount = rawAmount.trim() || catalogMatch?.amount || "за смаком";
+        const category = rawCategory.trim() || catalogMatch?.category || inferCategory(name, getState().productCatalog);
+        const price = rawPrice.trim() ? Number(rawPrice.trim()) : catalogMatch?.price ?? estimatePrice(name, getState().productCatalog);
+
+        return {
+          name,
+          amount,
+          category,
+          price: Math.max(Number(price) || 0, 0),
+          productId: catalogMatch?.id ?? null,
+        };
+      })
+      .filter(Boolean);
   }
 
-  function matchesPurchaseRequestItem(shoppingItem, requestItem) {
-    const shoppingItemId = Number(shoppingItem?.id);
-    const requestShoppingItemId = Number(requestItem?.shopping_item_id);
-
-    if (
-      Number.isInteger(shoppingItemId) &&
-      Number.isInteger(requestShoppingItemId) &&
-      shoppingItemId === requestShoppingItemId
-    ) {
-      return true;
-    }
-
-    const requestTarget = {
-      name: requestItem?.item_name,
-      productId: requestItem?.product_id ?? null,
-    };
-
-    return (
-      sameProduct(shoppingItem, requestTarget) ||
-      shoppingItem.name.trim().toLowerCase() === String(requestItem?.item_name || "").trim().toLowerCase()
-    );
+  async function refreshRequestResources({ renderIfChanged = false } = {}) {
+    await refreshFamilyPurchaseRequests({ renderIfChanged });
+    await refreshFamilyPurchaseRequestTemplates({ renderIfChanged });
   }
 
-  function applyBoughtRequestItemToShoppingState(requestItem, { showLocalToast = false } = {}) {
-    const shoppingItem = findShoppingItemForRequestItem(requestItem);
-    if (!shoppingItem || shoppingItem.checked) return false;
-
-    updateLocalShoppingItemState(shoppingItem, true);
-    render();
-
-    if (showLocalToast) {
-      showToast(`У спільному списку відмічено: ${shoppingItem.name}`);
-    }
-
-    return true;
+  async function loadPurchaseRequestDetails(requestId) {
+    const result = await getFamilyPurchaseRequestDetails(neonClient, requestId);
+    if (result.error) throw result.error;
+    return result.data || {};
   }
 
-  function buildRequestTitleDefault() {
+  async function loadPurchaseRequestTemplateDetails(templateId) {
+    const result = await getFamilyPurchaseRequestTemplateDetails(neonClient, templateId);
+    if (result.error) throw result.error;
+    return result.data || {};
+  }
+
+  function buildDefaultRequestTitle() {
     try {
       const dateLabel = new Intl.DateTimeFormat("uk-UA", {
         day: "2-digit",
@@ -138,7 +107,7 @@ export function createPurchaseRequestController(deps) {
       }).format(new Date());
       return `Покупки на ${dateLabel}`;
     } catch {
-      return "Покупки на тиждень";
+      return "Покупки";
     }
   }
 
@@ -155,7 +124,6 @@ export function createPurchaseRequestController(deps) {
         const resolverMarkup = item.resolver_display_name
           ? `<span>${escapeHtml(item.resolver_display_name)} · ${formatFamilyDateTime(item.resolved_at || item.updated_at)}</span>`
           : `<span>${formatFamilyDateTime(item.updated_at)}</span>`;
-        const buttonLabel = item.item_status === "bought" ? "Коментар" : item.item_status === "not_bought" ? "Оновити" : "Статус";
 
         return `
           <article class="purchase-request-item-card">
@@ -172,7 +140,7 @@ export function createPurchaseRequestController(deps) {
             ${noteMarkup}
             ${reasonMarkup}
             <button class="compact-button purchase-request-open" type="button" data-update-request-item="${item.request_item_id}">
-              ${icon("edit")} ${buttonLabel}
+              ${icon("edit")} Оновити статус
             </button>
           </article>
         `;
@@ -180,111 +148,208 @@ export function createPurchaseRequestController(deps) {
       .join("");
   }
 
-  async function loadPurchaseRequestDetails(requestId) {
-    const result = await getFamilyPurchaseRequestDetails(neonClient, requestId);
-    if (result.error) throw result.error;
-    return result.data || {};
-  }
-
-  async function openCreatePurchaseRequestModal() {
-    if (isPersonalScope()) {
-      showToast("Створи або обери сімейний простір для спільних запитів");
-      return;
-    }
-
-    const requestableItems = remainingItems();
-    if (!requestableItems.length) {
-      showToast("У списку немає активних покупок для запиту");
-      return;
-    }
+  function openPurchaseRequestEditorModal({
+    mode,
+    initialTitle = "",
+    initialNote = "",
+    initialItems = "",
+    templateId = null,
+  }) {
+    const templateMode = mode === "template";
+    const submitLabel = templateMode ? "Зберегти шаблон" : "Створити заявку";
 
     openModal(`
       <div class="sheet-handle"></div>
       <div class="sheet-header">
         <div>
-          <h2 id="modalTitle">Новий запит</h2>
-          <p>${escapeHtml(getCurrentScopeLabel())} · вибери, що саме треба купити</p>
+          <h2 id="modalTitle">${templateMode ? (templateId ? "Редагувати шаблон" : "Новий шаблон") : "Нова заявка"}</h2>
+          <p>${escapeHtml(getCurrentScopeLabel())} · позиції не прив'язані до конкретних страв</p>
         </div>
         <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
       </div>
-      <form id="purchaseRequestForm">
+      <form id="purchaseRequestEditorForm">
         <label class="field">
-          <span>Назва запиту</span>
-          <input name="requestTitle" type="text" maxlength="120" value="${escapeHtml(buildRequestTitleDefault())}" required autofocus />
+          <span>${templateMode ? "Назва шаблону" : "Назва заявки"}</span>
+          <input name="title" type="text" maxlength="120" value="${escapeHtml(initialTitle || (templateMode ? "Базова закупка" : buildDefaultRequestTitle()))}" required autofocus />
         </label>
         <label class="field">
-          <span>Коментар для сім'ї</span>
-          <textarea name="requestNote" rows="3" placeholder="Наприклад, магазин біля дому або дедлайн до вечора"></textarea>
+          <span>Коментар</span>
+          <textarea name="note" rows="3" placeholder="Наприклад, магазин біля дому або окремі побажання">${escapeHtml(initialNote)}</textarea>
         </label>
-        <div class="purchase-request-picker">
-          ${requestableItems
-            .map(
-              (item) => `
-                <label class="purchase-request-pick">
-                  <input type="checkbox" name="selectedItem" value="${item.id}" checked />
-                  <span>
-                    <strong>${escapeHtml(item.name)}</strong>
-                    <small>${escapeHtml(item.amount)} · ${formatMoney(item.price)}</small>
-                  </span>
-                </label>
-              `,
-            )
-            .join("")}
-        </div>
+        <label class="field">
+          <span>Позиції — один рядок = назва | кількість | категорія | ціна</span>
+          <textarea name="items" rows="8" placeholder="Молоко | 2 л | Молочне | 96&#10;Яйця | 20 шт | Молочне | 140" required>${escapeHtml(initialItems)}</textarea>
+          <small class="form-help">Категорію і ціну можна не вказувати: якщо інгредієнт є в банку, значення підставляться автоматично.</small>
+        </label>
         <div class="sheet-actions">
           <button class="secondary-button" type="button" data-close-modal>Скасувати</button>
-          <button class="primary-button" type="submit">${icon("save")} Створити запит</button>
+          <button class="primary-button" type="submit">${icon(templateMode ? "save" : "plus")} ${submitLabel}</button>
         </div>
       </form>
     `);
 
-    modalSheet.querySelector("#purchaseRequestForm").addEventListener("submit", async (event) => {
+    modalSheet.querySelector("#purchaseRequestEditorForm")?.addEventListener("submit", async (event) => {
       event.preventDefault();
       const form = event.currentTarget;
       const submitButton = form.querySelector("button[type='submit']");
       const formData = new FormData(form);
-      const selectedIds = formData.getAll("selectedItem").map((value) => Number(value));
-      const selectedItems = requestableItems.filter((item) => selectedIds.includes(item.id));
+      const items = parseRequestItems(formData.get("items"));
 
-      if (!selectedItems.length) {
-        showToast("Обери хоча б одну позицію");
+      if (!items.length) {
+        showToast("Додай хоча б одну позицію");
         return;
       }
 
       submitButton.disabled = true;
-      submitButton.textContent = "Створюю…";
+      submitButton.textContent = templateMode ? "Зберігаю…" : "Створюю…";
 
       try {
-        const result = await createFamilyPurchaseRequest(neonClient, {
-          request_title: formData.get("requestTitle").trim(),
-          request_note: formData.get("requestNote").trim(),
-          items: selectedItems.map((item) => ({
-            shoppingItemId: item.id,
-            productId: item.productId ?? null,
+        const payload = {
+          target_family_id: getActiveFamilyId(),
+          [templateMode ? "template_title" : "request_title"]: formData.get("title").trim(),
+          [templateMode ? "template_note" : "request_note"]: formData.get("note").trim(),
+          items: items.map((item) => ({
+            productId: item.productId,
             name: item.name,
             amount: item.amount,
             category: item.category,
             price: item.price,
           })),
-          target_family_id: getActiveFamilyId(),
-        });
+        };
+
+        const result = templateMode
+          ? await upsertFamilyPurchaseRequestTemplate(neonClient, {
+              ...payload,
+              target_template_id: templateId,
+            })
+          : await createFamilyPurchaseRequest(neonClient, payload);
 
         if (result.error) {
           submitButton.disabled = false;
-          submitButton.innerHTML = `${icon("save")} Створити запит`;
-          showToast(getFamilyPurchaseRequestsErrorMessage(result.error, "Не вдалося створити запит"));
+          submitButton.innerHTML = `${icon(templateMode ? "save" : "plus")} ${submitLabel}`;
+          showToast(
+            getFamilyPurchaseRequestsErrorMessage(
+              result.error,
+              templateMode ? "Не вдалося зберегти шаблон" : "Не вдалося створити заявку",
+            ),
+          );
           return;
         }
 
-        await refreshFamilyPurchaseRequests({ renderIfChanged: true });
+        await refreshRequestResources({ renderIfChanged: true });
         closeModal();
-        renderShoppingViewIfVisible();
-        showToast("Запит на покупки створено");
+        renderRequestsViewIfVisible();
+        showToast(templateMode ? "Шаблон збережено" : "Заявку створено");
       } catch (error) {
         submitButton.disabled = false;
-        submitButton.innerHTML = `${icon("save")} Створити запит`;
-        showToast(getFamilyPurchaseRequestsErrorMessage(error, "Не вдалося створити запит"));
+        submitButton.innerHTML = `${icon(templateMode ? "save" : "plus")} ${submitLabel}`;
+        showToast(
+          getFamilyPurchaseRequestsErrorMessage(
+            error,
+            templateMode ? "Не вдалося зберегти шаблон" : "Не вдалося створити заявку",
+          ),
+        );
       }
+    });
+  }
+
+  function openCreatePurchaseRequestModal(source = null) {
+    if (isPersonalScope()) {
+      showToast("Заявки доступні лише у сімейному просторі");
+      return;
+    }
+
+    const items = source?.items ? serializeRequestItems(normalizeRequestItems(source.items)) : "";
+    openPurchaseRequestEditorModal({
+      mode: "request",
+      initialTitle: source?.request_title || source?.template_title || "",
+      initialNote: source?.request_note || source?.template_note || "",
+      initialItems: items,
+    });
+  }
+
+  function openCreatePurchaseTemplateModal(source = null) {
+    if (isPersonalScope()) {
+      showToast("Шаблони доступні лише у сімейному просторі");
+      return;
+    }
+
+    const items = source?.items ? serializeRequestItems(normalizeRequestItems(source.items)) : "";
+    openPurchaseRequestEditorModal({
+      mode: "template",
+      initialTitle: source?.template_title || source?.request_title || "",
+      initialNote: source?.template_note || source?.request_note || "",
+      initialItems: items,
+      templateId: source?.template_id || null,
+    });
+  }
+
+  async function openEditPurchaseTemplateModal(templateId) {
+    try {
+      const template = await loadPurchaseRequestTemplateDetails(templateId);
+      openCreatePurchaseTemplateModal(template);
+    } catch (error) {
+      showToast(getFamilyPurchaseRequestsErrorMessage(error, "Не вдалося відкрити шаблон"));
+    }
+  }
+
+  async function openDeletePurchaseRequestModal(requestId, requestTitle) {
+    openModal(`
+      <div class="sheet-handle"></div>
+      <div class="sheet-header">
+        <div>
+          <h2 id="modalTitle">Видалити заявку?</h2>
+          <p>${escapeHtml(requestTitle)}</p>
+        </div>
+        <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
+      </div>
+      <div class="sheet-actions">
+        <button class="secondary-button" type="button" data-close-modal>Скасувати</button>
+        <button class="danger-button" type="button" data-confirm-delete-request>${icon("trash")} Видалити</button>
+      </div>
+    `);
+
+    modalSheet.querySelector("[data-confirm-delete-request]")?.addEventListener("click", async () => {
+      const result = await deleteFamilyPurchaseRequest(neonClient, requestId);
+      if (result.error) {
+        showToast(getFamilyPurchaseRequestsErrorMessage(result.error, "Не вдалося видалити заявку"));
+        return;
+      }
+
+      await refreshRequestResources({ renderIfChanged: true });
+      closeModal();
+      renderRequestsViewIfVisible();
+      showToast("Заявку видалено");
+    });
+  }
+
+  function openDeletePurchaseTemplateModal(templateId, templateTitle) {
+    openModal(`
+      <div class="sheet-handle"></div>
+      <div class="sheet-header">
+        <div>
+          <h2 id="modalTitle">Видалити шаблон?</h2>
+          <p>${escapeHtml(templateTitle)}</p>
+        </div>
+        <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
+      </div>
+      <div class="sheet-actions">
+        <button class="secondary-button" type="button" data-close-modal>Скасувати</button>
+        <button class="danger-button" type="button" data-confirm-delete-template>${icon("trash")} Видалити</button>
+      </div>
+    `);
+
+    modalSheet.querySelector("[data-confirm-delete-template]")?.addEventListener("click", async () => {
+      const result = await deleteFamilyPurchaseRequestTemplate(neonClient, templateId);
+      if (result.error) {
+        showToast(getFamilyPurchaseRequestsErrorMessage(result.error, "Не вдалося видалити шаблон"));
+        return;
+      }
+
+      await refreshRequestResources({ renderIfChanged: true });
+      closeModal();
+      renderRequestsViewIfVisible();
+      showToast("Шаблон видалено");
     });
   }
 
@@ -357,7 +422,7 @@ export function createPurchaseRequestController(deps) {
               <div class="empty-state">
                 <span class="empty-state-emoji">🔔</span>
                 <h3>Поки без подій</h3>
-                <p>Тут будуть з'являтися дії сім'ї, поки тебе не було в апці.</p>
+                <p>Тут з'являтимуться лише статуси по заявках на продукти.</p>
               </div>
             `
         }
@@ -381,7 +446,7 @@ export function createPurchaseRequestController(deps) {
       <div class="sheet-handle"></div>
       <div class="sheet-header">
         <div>
-          <h2 id="modalTitle">Запит на покупки</h2>
+          <h2 id="modalTitle">Заявка на продукти</h2>
           <p>Завантажую деталі…</p>
         </div>
         <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
@@ -397,7 +462,7 @@ export function createPurchaseRequestController(deps) {
         <div class="sheet-handle"></div>
         <div class="sheet-header">
           <div>
-            <h2 id="modalTitle">${escapeHtml(request.request_title || "Запит")}</h2>
+            <h2 id="modalTitle">${escapeHtml(request.request_title || "Заявка")}</h2>
             <p>${escapeHtml(request.creator_display_name || "Хтось")} · ${formatFamilyDateTime(request.updated_at || request.created_at)}</p>
           </div>
           <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
@@ -417,16 +482,36 @@ export function createPurchaseRequestController(deps) {
               : ""
           }
         </div>
+        <div class="purchase-request-toolbar">
+          <button class="compact-button primary add-item-button" type="button" data-repeat-purchase-request>
+            ${icon("plus")} Повторити
+          </button>
+          <button class="compact-button" type="button" data-save-request-template>
+            ${icon("save")} У шаблони
+          </button>
+          <button class="compact-button" type="button" data-delete-purchase-request>
+            ${icon("trash")} Видалити
+          </button>
+        </div>
         <div class="purchase-request-detail-list">
-          ${items.length ? renderPurchaseRequestDetailItems(items) : `<div class="empty-state"><span class="empty-state-emoji">🧺</span><h3>Позицій немає</h3><p>У цьому запиті ще немає товарів.</p></div>`}
+          ${items.length ? renderPurchaseRequestDetailItems(items) : `<div class="empty-state"><span class="empty-state-emoji">🧺</span><h3>Позицій немає</h3><p>У цій заявці ще немає товарів.</p></div>`}
         </div>
       `);
 
-      const requestTitle = request.request_title || "Запит";
+      modalSheet.querySelector("[data-repeat-purchase-request]")?.addEventListener("click", () => {
+        openCreatePurchaseRequestModal(request);
+      });
+      modalSheet.querySelector("[data-save-request-template]")?.addEventListener("click", () => {
+        openCreatePurchaseTemplateModal(request);
+      });
+      modalSheet.querySelector("[data-delete-purchase-request]")?.addEventListener("click", () => {
+        openDeletePurchaseRequestModal(requestId, request.request_title || "Заявка");
+      });
+
       modalSheet.querySelectorAll("[data-update-request-item]").forEach((button) => {
         const item = items.find((entry) => entry.request_item_id === Number(button.dataset.updateRequestItem));
         if (!item) return;
-        button.addEventListener("click", () => openPurchaseRequestItemStatusModal(requestId, requestTitle, item));
+        button.addEventListener("click", () => openPurchaseRequestItemStatusModal(requestId, request.request_title || "Заявка", item));
       });
     } catch (error) {
       openModal(`
@@ -529,11 +614,7 @@ export function createPurchaseRequestController(deps) {
           return;
         }
 
-        if (result.data?.status === "bought" || nextStatus === "bought") {
-          applyBoughtRequestItemToShoppingState(item);
-        }
-
-        await refreshFamilyPurchaseRequests({ renderIfChanged: true });
+        await refreshRequestResources({ renderIfChanged: true });
         await openPurchaseRequestDetails(requestId);
         showToast("Статус позиції оновлено");
       } catch (error) {
@@ -544,96 +625,21 @@ export function createPurchaseRequestController(deps) {
     });
   }
 
-  async function findPendingPurchaseRequestItemsForShoppingItem(shoppingItem) {
-    if (!canUseFamilyCloud() || isPersonalScope()) {
-      return [];
-    }
-
-    if (!getFamilyPurchaseRequests().length) {
-      await refreshFamilyPurchaseRequests();
-    }
-
-    const candidateRequests = getFamilyPurchaseRequests().filter(
-      (request) => isActivePurchaseRequestStatus(request.status) && Number(request.pending_items) > 0,
-    );
-
-    if (!candidateRequests.length) return [];
-
-    const detailSets = await Promise.all(
-      candidateRequests.map(async (request) => {
-        try {
-          const details = await loadPurchaseRequestDetails(request.request_id);
-          const items = Array.isArray(details.items) ? details.items : [];
-          return items
-            .filter(
-              (item) =>
-                item.item_status === "pending" && matchesPurchaseRequestItem(shoppingItem, item),
-            )
-            .map((item) => ({ item }));
-        } catch (error) {
-          if (isFamilyPurchaseRequestsUnavailable(error)) return [];
-          throw error;
-        }
-      }),
-    );
-
-    return detailSets.flat();
-  }
-
-  async function syncPurchaseRequestsFromShoppingItem(shoppingItem) {
-    if (!shoppingItem?.checked) return 0;
-
-    try {
-      const matchingItems = await findPendingPurchaseRequestItemsForShoppingItem(shoppingItem);
-      if (!matchingItems.length) return 0;
-
-      const results = await Promise.all(
-        matchingItems.map(({ item }) =>
-          updateFamilyPurchaseRequestItem(neonClient, {
-            target_request_item_id: item.request_item_id,
-            item_status: "bought",
-            resolution_note: "Позначено купленим зі списку покупок",
-            not_bought_reason: "",
-          }),
-        ),
-      );
-
-      const updatedCount = results.reduce((count, result) => {
-        if (result.error) return count;
-        return count + 1;
-      }, 0);
-
-      if (updatedCount > 0) {
-        await refreshFamilyPurchaseRequests({ renderIfChanged: true });
-      }
-
-      return updatedCount;
-    } catch {
-      return 0;
-    }
-  }
-
-  async function toggleShoppingItem(id, checked) {
-    const state = getState();
-    const item = state.shopping.find((entry) => entry.id === id);
-    if (!item || item.checked === checked) return;
-
-    updateLocalShoppingItemState(item, checked);
-    render();
-    showToast(checked ? `${item.name} — куплено` : `${item.name} повернуто у список`);
-
-    if (checked) {
-      const syncedRequestItems = await syncPurchaseRequestsFromShoppingItem(item);
-      if (syncedRequestItems === 0) {
-        publishShoppingProgressNotification(`«${item.name}» позначено як куплене`);
-      }
-    }
+  function openReusePurchaseTemplateModal(templateId) {
+    loadPurchaseRequestTemplateDetails(templateId)
+      .then((template) => openCreatePurchaseRequestModal(template))
+      .catch((error) => {
+        showToast(getFamilyPurchaseRequestsErrorMessage(error, "Не вдалося відкрити шаблон"));
+      });
   }
 
   return {
     openCreatePurchaseRequestModal,
+    openCreatePurchaseTemplateModal,
     openFamilyActivityModal,
     openPurchaseRequestDetails,
-    toggleShoppingItem,
+    openEditPurchaseTemplateModal,
+    openDeletePurchaseTemplateModal,
+    openReusePurchaseTemplateModal,
   };
 }

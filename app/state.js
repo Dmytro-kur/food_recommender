@@ -1,13 +1,8 @@
-import { STARTER_DATA_VERSION, defaultState, cookingGuides } from "./data.js";
+import { STARTER_DATA_VERSION, defaultState } from "./data.js";
 import {
-  getAlternativeText,
   normalizeIngredientName,
   parseLines,
-  parseQuantity,
-  formatQuantity,
 } from "./utils.js";
-
-export { getAlternativeText };
 
 export function normalizeProductId(value) {
   const numeric = Number(value);
@@ -161,6 +156,48 @@ function mergeStateValue(baseValue, localValue, remoteValue) {
   return mergeScalarValue(baseValue, localValue, remoteValue);
 }
 
+function normalizeActiveView(value) {
+  if (value === "pantry") return "pantry";
+  if (value === "requests" || value === "shopping") return "requests";
+  return "recipes";
+}
+
+function dedupeByIdentity(items = []) {
+  const seenIds = new Set();
+  const seenNames = new Set();
+  const deduped = [];
+
+  items.forEach((item) => {
+    const id = normalizeProductId(item?.id);
+    const identity = normalizeIngredientName(item?.title || item?.name || "");
+    if ((id !== null && seenIds.has(id)) || (identity && seenNames.has(identity))) {
+      return;
+    }
+
+    if (id !== null) seenIds.add(id);
+    if (identity) seenNames.add(identity);
+    deduped.push(item);
+  });
+
+  return deduped;
+}
+
+function mergeStarterCatalog(savedCatalog, starterCatalog) {
+  const saved = Array.isArray(savedCatalog) ? savedCatalog : [];
+  const merged = [...saved];
+
+  starterCatalog.forEach((starterItem) => {
+    const exists = merged.some(
+      (item) =>
+        item.id === starterItem.id ||
+        normalizeIngredientName(item.name || item.title) === normalizeIngredientName(starterItem.name || starterItem.title),
+    );
+    if (!exists) merged.push(structuredClone(starterItem));
+  });
+
+  return merged;
+}
+
 export function findCatalogProduct(target, catalog = []) {
   const productId = normalizeProductId(typeof target === "object" ? target?.productId : null);
   if (productId !== null) {
@@ -204,84 +241,95 @@ function attachProductLink(entry, catalog) {
   };
 }
 
-export function linkStateProducts(nextState) {
-  const catalog = Array.isArray(nextState.productCatalog) ? nextState.productCatalog : [];
-  const linkIngredients = (collection) =>
-    Array.isArray(collection)
-      ? collection.map((meal) => ({
-          ...meal,
-          ingredients: Array.isArray(meal.ingredients) ? meal.ingredients.map((ingredient) => attachProductLink(ingredient, catalog)) : [],
-        }))
-      : [];
+export function normalizeRecipe(recipe) {
+  const steps = Array.isArray(recipe?.steps)
+    ? recipe.steps.map((step) => String(step).trim()).filter(Boolean)
+    : [];
 
   return {
-    ...nextState,
-    pantry: Array.isArray(nextState.pantry) ? nextState.pantry.map((item) => attachProductLink(item, catalog)) : [],
-    shopping: Array.isArray(nextState.shopping) ? nextState.shopping.map((item) => attachProductLink(item, catalog)) : [],
-    meals: linkIngredients(nextState.meals),
-    recipeCatalog: linkIngredients(nextState.recipeCatalog),
-  };
-}
-
-function mergeStarterCatalog(savedCatalog, starterCatalog) {
-  const saved = Array.isArray(savedCatalog) ? savedCatalog : [];
-  const merged = [...saved];
-
-  starterCatalog.forEach((starterItem) => {
-    const exists = merged.some(
-      (item) =>
-        item.id === starterItem.id ||
-        normalizeIngredientName(item.name || item.title) === normalizeIngredientName(starterItem.name || starterItem.title),
-    );
-    if (!exists) merged.push(structuredClone(starterItem));
-  });
-
-  return merged;
-}
-
-export function normalizeMeal(meal) {
-  const steps = Array.isArray(meal.steps) && meal.steps.length ? meal.steps : cookingGuides[meal.title];
-
-  return {
-    ...meal,
-    ingredients: Array.isArray(meal.ingredients)
-      ? meal.ingredients.map((ingredient) => ({
-          ...ingredient,
-          missing: typeof ingredient.missing === "boolean" ? ingredient.missing : true,
-        }))
+    id: normalizeProductId(recipe?.id) ?? Date.now(),
+    title: String(recipe?.title || "").trim(),
+    time: Math.max(Number(recipe?.time) || 0, 0),
+    price: Math.max(Number(recipe?.price) || 0, 0),
+    emoji: String(recipe?.emoji || "🍲").trim() || "🍲",
+    tag: String(recipe?.tag || "Мій рецепт").trim() || "Мій рецепт",
+    ingredients: Array.isArray(recipe?.ingredients)
+      ? recipe.ingredients
+          .map((ingredient) => ({
+            name: String(ingredient?.name || "").trim(),
+            amount: String(ingredient?.amount || "за смаком").trim() || "за смаком",
+            missing: typeof ingredient?.missing === "boolean" ? ingredient.missing : true,
+            productId: normalizeProductId(ingredient?.productId),
+          }))
+          .filter((ingredient) => ingredient.name)
       : [],
-    steps: steps?.length
+    steps: steps.length
       ? steps
       : [
-          "Підготуй усі інгредієнти та кухонне приладдя.",
-          "Приготуй основні продукти до готовності, орієнтуючись на їхню текстуру.",
-          "З’єднай усе разом, додай сіль і спеції на смак та подавай гарячим.",
+          "Підготуй усі інгредієнти.",
+          "Приготуй основу страви до готовності.",
+          "Додай спеції на смак і подавай.",
         ],
   };
 }
 
+function collectLegacyRecipes(source, starterRecipes) {
+  const savedRecipes = Array.isArray(source?.recipeCatalog) ? source.recipeCatalog : [];
+  const savedMeals = Array.isArray(source?.meals) ? source.meals : [];
+
+  return dedupeByIdentity([
+    ...savedRecipes,
+    ...savedMeals.map((meal) => ({
+      id: meal.id,
+      title: meal.title,
+      time: meal.time,
+      price: meal.price,
+      emoji: meal.emoji,
+      tag: meal.tag || "Мій рецепт",
+      ingredients: meal.ingredients,
+      steps: meal.steps,
+    })),
+    ...starterRecipes,
+  ]);
+}
+
+export function linkStateProducts(nextState) {
+  const catalog = Array.isArray(nextState.productCatalog) ? nextState.productCatalog : [];
+
+  return {
+    ...nextState,
+    productCatalog: catalog,
+    pantry: Array.isArray(nextState.pantry) ? nextState.pantry.map((item) => attachProductLink(item, catalog)) : [],
+    recipeCatalog: Array.isArray(nextState.recipeCatalog)
+      ? nextState.recipeCatalog.map((recipe) => ({
+          ...recipe,
+          ingredients: Array.isArray(recipe.ingredients)
+            ? recipe.ingredients.map((ingredient) => attachProductLink(ingredient, catalog))
+            : [],
+        }))
+      : [],
+  };
+}
+
 export function hydrateState(saved) {
-  const base = structuredClone(defaultState);
   const source = saved || {};
+  const base = structuredClone(defaultState);
+  const productCatalog = mergeStarterCatalog(source.productCatalog, base.productCatalog);
+  const recipeCatalog = collectLegacyRecipes(source, base.recipeCatalog).map(normalizeRecipe);
+
   const hydrated = {
-    ...base,
-    ...source,
-    meals: Array.isArray(source.meals) ? source.meals : base.meals,
-    shopping: Array.isArray(source.shopping) ? source.shopping : base.shopping,
-    pantry: Array.isArray(source.pantry) ? source.pantry : base.pantry,
-    productCatalog: mergeStarterCatalog(source.productCatalog, base.productCatalog),
-    recipeCatalog: mergeStarterCatalog(source.recipeCatalog, base.recipeCatalog),
     dataVersion: STARTER_DATA_VERSION,
+    activeView: normalizeActiveView(source.activeView),
+    pantry: Array.isArray(source.pantry) ? source.pantry : base.pantry,
+    productCatalog,
+    recipeCatalog,
   };
 
-  hydrated.meals = hydrated.meals.map(normalizeMeal);
-  hydrated.recipeCatalog = hydrated.recipeCatalog.map(normalizeMeal);
-  hydrated.selectedDay = Math.min(Math.max(Number(hydrated.selectedDay) || 0, 0), Math.max(hydrated.meals.length - 1, 0));
   return linkStateProducts(hydrated);
 }
 
 export function serializeStateSnapshot(snapshot) {
-  return JSON.stringify(canonicalizeValue(snapshot));
+  return JSON.stringify(canonicalizeValue(hydrateState(snapshot)));
 }
 
 export function areStatesEqual(left, right) {
@@ -291,40 +339,9 @@ export function areStatesEqual(left, right) {
 export function mergeSharedState(baseState, localState, remoteState) {
   const merged = mergeStateValue(baseState || {}, localState || {}, remoteState || {}) || {};
   if (localState?.activeView) {
-    merged.activeView = localState.activeView;
+    merged.activeView = normalizeActiveView(localState.activeView);
   }
-  if (Number.isFinite(localState?.selectedDay)) {
-    merged.selectedDay = localState.selectedDay;
-  }
-  return linkStateProducts(merged);
-}
-
-export function remainingItems(state) {
-  return state.shopping.filter((item) => !item.checked);
-}
-
-export function shoppingTotal(state) {
-  return state.shopping.reduce((sum, item) => sum + item.price, 0);
-}
-
-export function checkedTotal(state) {
-  return state.shopping.filter((item) => item.checked).reduce((sum, item) => sum + item.price, 0);
-}
-
-export function getSortedSuggestions(state) {
-  return state.meals
-    .slice(1)
-    .map((meal) => ({
-      ...meal,
-      available: meal.ingredients.filter((ingredient) => !ingredient.missing).length,
-      total: meal.ingredients.length,
-    }))
-    .sort((a, b) => {
-      if (state.priority === "price") return a.price - b.price || a.time - b.time;
-      if (state.priority === "time") return a.time - b.time || a.price - b.price;
-      return a.price + a.time * 1.8 - (b.price + b.time * 1.8);
-    })
-    .slice(0, 3);
+  return hydrateState(merged);
 }
 
 export function findPantryIngredient(target, pantry, catalog = []) {
@@ -362,34 +379,11 @@ export function parseIngredients(value, state) {
 }
 
 export function syncIngredientAvailability(state) {
-  [...state.meals, ...state.recipeCatalog].forEach((meal) => {
-    meal.ingredients.forEach((ingredient) => {
+  state.recipeCatalog.forEach((recipe) => {
+    recipe.ingredients.forEach((ingredient) => {
       ingredient.missing = !hasPantryIngredient(ingredient, state.pantry, state.productCatalog);
     });
   });
-}
-
-export function consumePantryAmount(state, itemId, usedAmount) {
-  const index = state.pantry.findIndex((item) => item.id === itemId);
-  if (index < 0) return;
-
-  const item = state.pantry[index];
-  const available = parseQuantity(item.amount);
-  const used = parseQuantity(usedAmount);
-
-  if (!available || !used || available.dimension !== used.dimension) {
-    item.low = true;
-    return;
-  }
-
-  const remaining = available.baseValue - used.baseValue;
-  if (remaining <= 0.0001) {
-    state.pantry.splice(index, 1);
-    return;
-  }
-
-  item.amount = formatQuantity(remaining, available);
-  item.low = remaining / available.baseValue <= 0.35 || (available.dimension === "count" && remaining <= 2);
 }
 
 export function inferCategory(target, productCatalog = []) {
@@ -399,8 +393,10 @@ export function inferCategory(target, productCatalog = []) {
   const name = typeof target === "string" ? target : target?.name || "";
   const normalized = name.toLowerCase();
   if (["йогурт", "сир", "молоко", "вершки"].some((word) => normalized.includes(word))) return "Молочне";
-  if (["кур", "м’яс", "риба"].some((word) => normalized.includes(word))) return "М’ясо та риба";
-  if (["булгур", "греч", "хліб", "рис", "макарон"].some((word) => normalized.includes(word))) return "Бакалія";
+  if (["кур", "м’яс", "риба", "тунець"].some((word) => normalized.includes(word))) return "М’ясо та риба";
+  if (["булгур", "греч", "хліб", "рис", "макарон", "сочевиц", "борошн", "олія"].some((word) => normalized.includes(word))) {
+    return "Бакалія";
+  }
   return "Овочі";
 }
 
@@ -415,24 +411,7 @@ export function estimatePrice(target, productCatalog = []) {
     Печериці: 42,
     Зелень: 22,
     Хліб: 36,
+    Яйця: 68,
   };
   return prices[name] || 35;
-}
-
-export function syncMealDates(state) {
-  const shortDays = ["Нд", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"];
-  const fullDays = ["Неділя", "Понеділок", "Вівторок", "Середа", "Четвер", "П’ятниця", "Субота"];
-  const today = new Date();
-  today.setHours(12, 0, 0, 0);
-
-  state.meals = state.meals.map((meal, index) => {
-    const date = new Date(today);
-    date.setDate(today.getDate() + index);
-    return {
-      ...meal,
-      day: index === 0 ? "Сьогодні" : index === 1 ? "Завтра" : fullDays[date.getDay()],
-      shortDay: shortDays[date.getDay()],
-      date: date.getDate(),
-    };
-  });
 }

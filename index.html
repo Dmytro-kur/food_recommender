@@ -5,12 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta
       name="description"
-      content="Кишеньковий помічник для дешевого меню, швидких рецептів і розумного списку покупок."
+      content="Кулінарна книга з рецептами, запасами інгредієнтів і сімейними заявками на продукти."
     />
     <meta name="theme-color" content="#f7f5ee" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
-    <title>Крихта — меню та покупки</title>
+    <title>Крихта — рецепти та заявки</title>
     <link rel="manifest" href="./manifest.webmanifest" />
     <link rel="icon" href="./icon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="./styles.css" />
@@ -18,7 +18,7 @@
   <body>
     <div class="app-shell">
       <header class="topbar">
-        <button class="brand" type="button" data-view-link="home" aria-label="На головну">
+        <button class="brand" type="button" data-view-link="recipes" aria-label="До рецептів">
           <span class="brand-mark" aria-hidden="true">
             <svg viewBox="0 0 32 32">
               <path d="M9 9.5C9 5.9 12 3 15.7 3h.6C20 3 23 5.9 23 9.5v1.1H9V9.5Z" />
@@ -44,33 +44,26 @@
       </main>
 
       <nav class="bottom-nav" aria-label="Головна навігація">
-        <button class="nav-item active" type="button" data-view="home">
+        <button class="nav-item active" type="button" data-view="recipes">
           <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="m3 11 9-8 9 8v9a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1v-9Z" />
+            <path d="M5 4h14a2 2 0 0 1 2 2v13H3V6a2 2 0 0 1 2-2Z" />
+            <path d="M7 8h10M7 12h10M7 16h6" />
           </svg>
-          <span>Сьогодні</span>
+          <span>Рецепти</span>
         </button>
-        <button class="nav-item" type="button" data-view="menu">
+        <button class="nav-item nav-shopping" type="button" data-view="requests">
+          <span id="requestsBadge" class="nav-badge" hidden>0</span>
           <svg viewBox="0 0 24 24" aria-hidden="true">
-            <rect x="3" y="5" width="18" height="16" rx="2" />
-            <path d="M16 3v4M8 3v4M3 10h18M8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01" />
+            <path d="M6 4h12a2 2 0 0 1 2 2v12l-4-3-4 3-4-3-4 3V6a2 2 0 0 1 2-2Z" />
+            <path d="M8 8h8M8 12h6" />
           </svg>
-          <span>Меню</span>
-        </button>
-        <button class="nav-item nav-shopping" type="button" data-view="shopping">
-          <span id="shoppingBadge" class="nav-badge">0</span>
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <circle cx="9" cy="20" r="1" />
-            <circle cx="19" cy="20" r="1" />
-            <path d="M3 4h2l2.4 11.2a2 2 0 0 0 2 1.6h7.8a2 2 0 0 0 2-1.6L21 8H6" />
-          </svg>
-          <span>Покупки</span>
+          <span>Заявки</span>
         </button>
         <button class="nav-item" type="button" data-view="pantry">
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path d="M4 8h16v12a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V8ZM3 4h18v4H3zM10 12h4" />
           </svg>
-          <span>Запаси</span>
+          <span>Інгредієнти</span>
         </button>
       </nav>
     </div>
