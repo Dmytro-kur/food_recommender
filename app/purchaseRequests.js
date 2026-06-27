@@ -82,6 +82,65 @@ export function createPurchaseRequestController(deps) {
       .filter(Boolean);
   }
 
+  function buildRequestLineFromProduct(product) {
+    return `${product.name} | ${product.amount || "за смаком"} | ${product.category || "Інше"} | ${Math.max(Number(product.price) || 0, 0)}`;
+  }
+
+  function renderCatalogProductOptions() {
+    const catalog = [...getState().productCatalog].sort((left, right) => {
+      const categoryCompare = String(left.category || "").localeCompare(String(right.category || ""), "uk");
+      if (categoryCompare !== 0) return categoryCompare;
+      return String(left.name || "").localeCompare(String(right.name || ""), "uk");
+    });
+
+    const grouped = catalog.reduce((groups, product) => {
+      const category = product.category || "Інше";
+      groups[category] ||= [];
+      groups[category].push(product);
+      return groups;
+    }, {});
+
+    return Object.entries(grouped)
+      .map(
+        ([category, products]) => `
+          <optgroup label="${escapeHtml(category)}">
+            ${products
+              .map(
+                (product) => `
+                  <option value="${product.id}">
+                    ${escapeHtml(product.name)} · ${escapeHtml(product.amount || "за смаком")} · ${formatMoney(product.price || 0)}
+                  </option>
+                `,
+              )
+              .join("")}
+          </optgroup>
+        `,
+      )
+      .join("");
+  }
+
+  function appendCatalogProductToItemsField(textarea, productId) {
+    const product = getState().productCatalog.find((entry) => entry.id === productId);
+    if (!product || !textarea) return false;
+
+    const currentItems = parseRequestItems(textarea.value);
+    const exists = currentItems.some(
+      (item) => item.productId === product.id || String(item.name || "").trim().toLowerCase() === String(product.name || "").trim().toLowerCase(),
+    );
+
+    if (exists) {
+      showToast(`${product.name} уже є в заявці`);
+      return false;
+    }
+
+    const nextLine = buildRequestLineFromProduct(product);
+    textarea.value = textarea.value.trim()
+      ? `${textarea.value.trimEnd()}\n${nextLine}`
+      : nextLine;
+    textarea.focus();
+    return true;
+  }
+
   async function refreshRequestResources({ renderIfChanged = false } = {}) {
     await refreshFamilyPurchaseRequests({ renderIfChanged });
     await refreshFamilyPurchaseRequestTemplates({ renderIfChanged });
@@ -124,6 +183,37 @@ export function createPurchaseRequestController(deps) {
         const resolverMarkup = item.resolver_display_name
           ? `<span>${escapeHtml(item.resolver_display_name)} · ${formatFamilyDateTime(item.resolved_at || item.updated_at)}</span>`
           : `<span>${formatFamilyDateTime(item.updated_at)}</span>`;
+        const actionButtons = [];
+
+        if (item.item_status !== "bought") {
+          actionButtons.push(`
+            <button class="compact-button success" type="button" data-mark-request-item-bought="${item.request_item_id}">
+              ${icon("save")} Куплено
+            </button>
+          `);
+        }
+
+        if (item.item_status === "pending") {
+          actionButtons.push(`
+            <button class="compact-button warning" type="button" data-mark-request-item-not-bought="${item.request_item_id}">
+              ${icon("edit")} Не куплено
+            </button>
+          `);
+        }
+
+        if (item.item_status === "not_bought") {
+          actionButtons.push(`
+            <button class="compact-button" type="button" data-reset-request-item-pending="${item.request_item_id}">
+              ${icon("arrow")} Повернути
+            </button>
+          `);
+        }
+
+        actionButtons.push(`
+          <button class="compact-button purchase-request-open" type="button" data-comment-request-item="${item.request_item_id}">
+            ${icon("edit")} Коментар
+          </button>
+        `);
 
         return `
           <article class="purchase-request-item-card">
@@ -139,13 +229,162 @@ export function createPurchaseRequestController(deps) {
             </div>
             ${noteMarkup}
             ${reasonMarkup}
-            <button class="compact-button purchase-request-open" type="button" data-update-request-item="${item.request_item_id}">
-              ${icon("edit")} Оновити статус
-            </button>
+            <div class="purchase-request-item-actions">
+              ${actionButtons.join("")}
+            </div>
           </article>
         `;
       })
       .join("");
+  }
+
+  async function submitPurchaseRequestItemUpdate(requestId, item, payload, successMessage) {
+    const result = await updateFamilyPurchaseRequestItem(neonClient, {
+      target_request_item_id: item.request_item_id,
+      item_status: payload.item_status,
+      resolution_note: payload.resolution_note || "",
+      not_bought_reason: payload.not_bought_reason || "",
+    });
+
+    if (result.error) {
+      showToast(getFamilyPurchaseRequestsErrorMessage(result.error, "Не вдалося оновити позицію"));
+      return false;
+    }
+
+    await refreshRequestResources({ renderIfChanged: true });
+    await openPurchaseRequestDetails(requestId);
+    showToast(successMessage);
+    return true;
+  }
+
+  function openPurchaseRequestItemCommentModal(requestId, requestTitle, item) {
+    const needsReason = item.item_status === "not_bought";
+
+    openModal(`
+      <div class="sheet-handle"></div>
+      <div class="sheet-header">
+        <div>
+          <h2 id="modalTitle">${escapeHtml(item.item_name)}</h2>
+          <p>${escapeHtml(requestTitle)} · ${escapeHtml(item.amount)}</p>
+        </div>
+        <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
+      </div>
+      <form id="purchaseRequestItemCommentForm">
+        <label class="field">
+          <span>Коментар</span>
+          <textarea name="resolutionNote" rows="3" placeholder="Наприклад, купив в АТБ або візьму завтра">${escapeHtml(item.resolution_note || "")}</textarea>
+        </label>
+        ${
+          needsReason
+            ? `
+              <label class="field">
+                <span>Причина, чому не куплено</span>
+                <textarea name="notBoughtReason" rows="3" placeholder="Наприклад, не було в наявності" required>${escapeHtml(item.not_bought_reason || "")}</textarea>
+              </label>
+            `
+            : ""
+        }
+        <div class="sheet-actions">
+          <button class="secondary-button" type="button" data-back-to-request>Назад</button>
+          <button class="primary-button" type="submit">${icon("save")} Зберегти</button>
+        </div>
+      </form>
+    `);
+
+    const form = modalSheet.querySelector("#purchaseRequestItemCommentForm");
+    modalSheet.querySelector("[data-back-to-request]")?.addEventListener("click", () => openPurchaseRequestDetails(requestId));
+
+    form?.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const submitButton = form.querySelector("button[type='submit']");
+      const formData = new FormData(form);
+
+      submitButton.disabled = true;
+      submitButton.textContent = "Зберігаю…";
+
+      try {
+        const updated = await submitPurchaseRequestItemUpdate(
+          requestId,
+          item,
+          {
+            item_status: item.item_status,
+            resolution_note: String(formData.get("resolutionNote") || "").trim(),
+            not_bought_reason: String(formData.get("notBoughtReason") || "").trim(),
+          },
+          "Коментар оновлено",
+        );
+
+        if (!updated) {
+          submitButton.disabled = false;
+          submitButton.innerHTML = `${icon("save")} Зберегти`;
+        }
+      } catch (error) {
+        submitButton.disabled = false;
+        submitButton.innerHTML = `${icon("save")} Зберегти`;
+        showToast(getFamilyPurchaseRequestsErrorMessage(error, "Не вдалося оновити позицію"));
+      }
+    });
+  }
+
+  function openPurchaseRequestItemNotBoughtModal(requestId, requestTitle, item) {
+    openModal(`
+      <div class="sheet-handle"></div>
+      <div class="sheet-header">
+        <div>
+          <h2 id="modalTitle">Не куплено</h2>
+          <p>${escapeHtml(item.item_name)} · ${escapeHtml(requestTitle)}</p>
+        </div>
+        <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
+      </div>
+      <form id="purchaseRequestItemNotBoughtForm">
+        <label class="field">
+          <span>Причина</span>
+          <textarea name="notBoughtReason" rows="3" placeholder="Наприклад, не було в наявності" required autofocus>${escapeHtml(item.not_bought_reason || "")}</textarea>
+        </label>
+        <label class="field">
+          <span>Коментар</span>
+          <textarea name="resolutionNote" rows="3" placeholder="Наприклад, спробую в іншому магазині">${escapeHtml(item.resolution_note || "")}</textarea>
+        </label>
+        <div class="sheet-actions">
+          <button class="secondary-button" type="button" data-back-to-request>Назад</button>
+          <button class="primary-button" type="submit">${icon("save")} Зберегти</button>
+        </div>
+      </form>
+    `);
+
+    const form = modalSheet.querySelector("#purchaseRequestItemNotBoughtForm");
+    modalSheet.querySelector("[data-back-to-request]")?.addEventListener("click", () => openPurchaseRequestDetails(requestId));
+
+    form?.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const submitButton = form.querySelector("button[type='submit']");
+      const formData = new FormData(form);
+
+      submitButton.disabled = true;
+      submitButton.textContent = "Зберігаю…";
+
+      try {
+        const updated = await submitPurchaseRequestItemUpdate(
+          requestId,
+          item,
+          {
+            item_status: "not_bought",
+            resolution_note: String(formData.get("resolutionNote") || "").trim(),
+            not_bought_reason: String(formData.get("notBoughtReason") || "").trim(),
+          },
+          "Позицію позначено як не куплену",
+        );
+
+        if (!updated) {
+          submitButton.disabled = false;
+          submitButton.innerHTML = `${icon("save")} Зберегти`;
+        }
+      } catch (error) {
+        submitButton.disabled = false;
+        submitButton.innerHTML = `${icon("save")} Зберегти`;
+        showToast(getFamilyPurchaseRequestsErrorMessage(error, "Не вдалося оновити позицію"));
+      }
+    });
   }
 
   function openPurchaseRequestEditorModal({
@@ -157,6 +396,8 @@ export function createPurchaseRequestController(deps) {
   }) {
     const templateMode = mode === "template";
     const submitLabel = templateMode ? "Зберегти шаблон" : "Створити заявку";
+    const catalogCount = getState().productCatalog.length;
+    const hasCatalogProducts = catalogCount > 0;
 
     openModal(`
       <div class="sheet-handle"></div>
@@ -176,6 +417,27 @@ export function createPurchaseRequestController(deps) {
           <span>Коментар</span>
           <textarea name="note" rows="3" placeholder="Наприклад, магазин біля дому або окремі побажання">${escapeHtml(initialNote)}</textarea>
         </label>
+        ${
+          hasCatalogProducts
+            ? `
+              <div class="purchase-request-picker">
+                <span>Швидкий вибір з банку інгредієнтів</span>
+                <div class="purchase-request-picker-grid">
+                  <label class="field">
+                    <select name="catalogProductId">
+                      <option value="">Вибери продукт із ${catalogCount}</option>
+                      ${renderCatalogProductOptions()}
+                    </select>
+                  </label>
+                  <button class="secondary-button purchase-request-picker-button" type="button" data-add-catalog-item disabled>
+                    ${icon("plus")} Додати
+                  </button>
+                </div>
+                <small class="form-help">Вибір зі списку одразу підставляє назву, базову кількість, категорію і орієнтовну ціну.</small>
+              </div>
+            `
+            : ""
+        }
         <label class="field">
           <span>Позиції — один рядок = назва | кількість | категорія | ціна</span>
           <textarea name="items" rows="8" placeholder="Молоко | 2 л | Молочне | 96&#10;Яйця | 20 шт | Молочне | 140" required>${escapeHtml(initialItems)}</textarea>
@@ -188,11 +450,39 @@ export function createPurchaseRequestController(deps) {
       </form>
     `);
 
-    modalSheet.querySelector("#purchaseRequestEditorForm")?.addEventListener("submit", async (event) => {
+    const form = modalSheet.querySelector("#purchaseRequestEditorForm");
+    const itemsField = form?.querySelector("[name='items']");
+    const catalogSelect = form?.querySelector("[name='catalogProductId']");
+    const addCatalogButton = form?.querySelector("[data-add-catalog-item]");
+
+    const syncCatalogButtonState = () => {
+      if (!addCatalogButton || !catalogSelect) return;
+      addCatalogButton.disabled = !catalogSelect.value;
+    };
+
+    catalogSelect?.addEventListener("change", syncCatalogButtonState);
+    addCatalogButton?.addEventListener("click", () => {
+      const rawProductId = String(catalogSelect?.value || "").trim();
+      const productId = Number.parseInt(rawProductId, 10);
+      if (!rawProductId || !Number.isInteger(productId)) {
+        showToast("Спершу вибери продукт зі списку");
+        return;
+      }
+
+      const added = appendCatalogProductToItemsField(itemsField, productId);
+      if (!added) return;
+
+      catalogSelect.value = "";
+      syncCatalogButtonState();
+      showToast("Позицію додано до заявки");
+    });
+    syncCatalogButtonState();
+
+    form?.addEventListener("submit", async (event) => {
       event.preventDefault();
-      const form = event.currentTarget;
-      const submitButton = form.querySelector("button[type='submit']");
-      const formData = new FormData(form);
+      const currentForm = event.currentTarget;
+      const submitButton = currentForm.querySelector("button[type='submit']");
+      const formData = new FormData(currentForm);
       const items = parseRequestItems(formData.get("items"));
 
       if (!items.length) {
@@ -508,10 +798,56 @@ export function createPurchaseRequestController(deps) {
         openDeletePurchaseRequestModal(requestId, request.request_title || "Заявка");
       });
 
-      modalSheet.querySelectorAll("[data-update-request-item]").forEach((button) => {
-        const item = items.find((entry) => entry.request_item_id === Number(button.dataset.updateRequestItem));
+      modalSheet.querySelectorAll("[data-mark-request-item-bought]").forEach((button) => {
+        const item = items.find((entry) => entry.request_item_id === Number(button.dataset.markRequestItemBought));
         if (!item) return;
-        button.addEventListener("click", () => openPurchaseRequestItemStatusModal(requestId, request.request_title || "Заявка", item));
+        button.addEventListener("click", async () => {
+          button.disabled = true;
+          const updated = await submitPurchaseRequestItemUpdate(
+            requestId,
+            item,
+            {
+              item_status: "bought",
+              resolution_note: item.resolution_note || "",
+              not_bought_reason: "",
+            },
+            "Позицію позначено як куплену",
+          );
+          if (!updated) button.disabled = false;
+        });
+      });
+
+      modalSheet.querySelectorAll("[data-mark-request-item-not-bought]").forEach((button) => {
+        const item = items.find((entry) => entry.request_item_id === Number(button.dataset.markRequestItemNotBought));
+        if (!item) return;
+        button.addEventListener("click", () => {
+          openPurchaseRequestItemNotBoughtModal(requestId, request.request_title || "Заявка", item);
+        });
+      });
+
+      modalSheet.querySelectorAll("[data-reset-request-item-pending]").forEach((button) => {
+        const item = items.find((entry) => entry.request_item_id === Number(button.dataset.resetRequestItemPending));
+        if (!item) return;
+        button.addEventListener("click", async () => {
+          button.disabled = true;
+          const updated = await submitPurchaseRequestItemUpdate(
+            requestId,
+            item,
+            {
+              item_status: "pending",
+              resolution_note: item.resolution_note || "",
+              not_bought_reason: "",
+            },
+            "Позицію повернуто в очікування",
+          );
+          if (!updated) button.disabled = false;
+        });
+      });
+
+      modalSheet.querySelectorAll("[data-comment-request-item]").forEach((button) => {
+        const item = items.find((entry) => entry.request_item_id === Number(button.dataset.commentRequestItem));
+        if (!item) return;
+        button.addEventListener("click", () => openPurchaseRequestItemCommentModal(requestId, request.request_title || "Заявка", item));
       });
     } catch (error) {
       openModal(`
@@ -525,104 +861,6 @@ export function createPurchaseRequestController(deps) {
         </div>
       `);
     }
-  }
-
-  function syncRequestItemStatusForm(form, lockedBought = false) {
-    const statusSelect = form.querySelector("[name='itemStatus']");
-    const reasonField = form.querySelector("[data-not-bought-reason-field]");
-    const reasonInput = form.querySelector("[name='notBoughtReason']");
-
-    const sync = () => {
-      const isNotBought = !lockedBought && statusSelect.value === "not_bought";
-      reasonField.hidden = !isNotBought;
-      reasonInput.required = isNotBought;
-      if (!isNotBought) {
-        reasonInput.value = "";
-      }
-    };
-
-    statusSelect?.addEventListener("change", sync);
-    sync();
-  }
-
-  async function openPurchaseRequestItemStatusModal(requestId, requestTitle, item) {
-    const statusLocked = item.item_status === "bought";
-    const statusOptions = statusLocked
-      ? `<option value="bought" selected>Куплено</option>`
-      : `
-        <option value="pending" ${item.item_status === "pending" ? "selected" : ""}>Очікує</option>
-        <option value="bought" ${item.item_status === "bought" ? "selected" : ""}>Куплено</option>
-        <option value="not_bought" ${item.item_status === "not_bought" ? "selected" : ""}>Не куплено</option>
-      `;
-
-    openModal(`
-      <div class="sheet-handle"></div>
-      <div class="sheet-header">
-        <div>
-          <h2 id="modalTitle">${escapeHtml(item.item_name)}</h2>
-          <p>${escapeHtml(requestTitle)} · ${escapeHtml(item.amount)}</p>
-        </div>
-        <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
-      </div>
-      <form id="purchaseRequestItemForm">
-        <label class="field">
-          <span>Статус</span>
-          <select name="itemStatus" ${statusLocked ? "disabled" : ""}>
-            ${statusOptions}
-          </select>
-        </label>
-        <label class="field">
-          <span>${statusLocked ? "Коментар до покупки" : "Коментар"}</span>
-          <textarea name="resolutionNote" rows="3" placeholder="Наприклад, купив в АТБ або буде завтра">${escapeHtml(item.resolution_note || "")}</textarea>
-        </label>
-        <label class="field" data-not-bought-reason-field ${item.item_status === "not_bought" ? "" : "hidden"}>
-          <span>Причина, чому не куплено</span>
-          <textarea name="notBoughtReason" rows="3" placeholder="Наприклад, не було в наявності">${escapeHtml(item.not_bought_reason || "")}</textarea>
-        </label>
-        <div class="sheet-actions">
-          <button class="secondary-button" type="button" data-back-to-request>Назад</button>
-          <button class="primary-button" type="submit">${icon("save")} Зберегти</button>
-        </div>
-      </form>
-    `);
-
-    const form = modalSheet.querySelector("#purchaseRequestItemForm");
-    syncRequestItemStatusForm(form, statusLocked);
-    modalSheet.querySelector("[data-back-to-request]")?.addEventListener("click", () => openPurchaseRequestDetails(requestId));
-
-    form.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const submitButton = form.querySelector("button[type='submit']");
-      const formData = new FormData(form);
-      const nextStatus = statusLocked ? "bought" : formData.get("itemStatus");
-
-      submitButton.disabled = true;
-      submitButton.textContent = "Зберігаю…";
-
-      try {
-        const result = await updateFamilyPurchaseRequestItem(neonClient, {
-          target_request_item_id: item.request_item_id,
-          item_status: nextStatus,
-          resolution_note: formData.get("resolutionNote").trim(),
-          not_bought_reason: formData.get("notBoughtReason").trim(),
-        });
-
-        if (result.error) {
-          submitButton.disabled = false;
-          submitButton.innerHTML = `${icon("save")} Зберегти`;
-          showToast(getFamilyPurchaseRequestsErrorMessage(result.error, "Не вдалося оновити позицію"));
-          return;
-        }
-
-        await refreshRequestResources({ renderIfChanged: true });
-        await openPurchaseRequestDetails(requestId);
-        showToast("Статус позиції оновлено");
-      } catch (error) {
-        submitButton.disabled = false;
-        submitButton.innerHTML = `${icon("save")} Зберегти`;
-        showToast(getFamilyPurchaseRequestsErrorMessage(error, "Не вдалося оновити позицію"));
-      }
-    });
   }
 
   function openReusePurchaseTemplateModal(templateId) {

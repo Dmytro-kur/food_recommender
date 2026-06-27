@@ -1,4 +1,4 @@
-import { escapeHtml, parseLines } from "./utils.js";
+import { escapeHtml, parseLines, pluralize } from "./utils.js";
 import { formatMoney, icon } from "./ui.js";
 
 export function createMenuController(deps) {
