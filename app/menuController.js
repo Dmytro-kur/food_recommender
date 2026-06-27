@@ -94,6 +94,9 @@ export function createMenuController(deps) {
   }
 
   function renderRecipeProductOptions(selectedProductId = null) {
+    const normalizedSelectedProductId = Number.isInteger(Number(selectedProductId))
+      ? Number(selectedProductId)
+      : null;
     const catalog = [...getState().productCatalog].sort((left, right) => {
       const categoryCompare = String(left.category || "").localeCompare(String(right.category || ""), "uk");
       if (categoryCompare !== 0) return categoryCompare;
@@ -114,7 +117,7 @@ export function createMenuController(deps) {
             ${products
               .map(
                 (product) => `
-                  <option value="${product.id}" ${product.id === selectedProductId ? "selected" : ""}>
+                  <option value="${product.id}" ${Number(product.id) === normalizedSelectedProductId ? "selected" : ""}>
                     ${escapeHtml(product.name)} · ${escapeHtml(product.amount || "за смаком")} · ${formatMoney(product.price || 0)}
                   </option>
                 `,

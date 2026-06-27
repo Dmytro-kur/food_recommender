@@ -195,6 +195,28 @@ function mergeStarterCatalog(savedCatalog, starterCatalog) {
   return merged;
 }
 
+function normalizeCatalogProduct(product, fallbackIndex = 0) {
+  return {
+    id: normalizeProductId(product?.id) ?? Date.now() + fallbackIndex,
+    name: String(product?.name || "").trim(),
+    amount: String(product?.amount || "за смаком").trim() || "за смаком",
+    price: Math.max(Number(product?.price) || 0, 0),
+    category: String(product?.category || "Інше").trim() || "Інше",
+    emoji: String(product?.emoji || "🥫").trim() || "🥫",
+  };
+}
+
+function normalizePantryItem(item, fallbackIndex = 0) {
+  return {
+    id: normalizeProductId(item?.id) ?? Date.now() + fallbackIndex,
+    name: String(item?.name || "").trim(),
+    amount: String(item?.amount || "за смаком").trim() || "за смаком",
+    emoji: String(item?.emoji || "🥫").trim() || "🥫",
+    low: Boolean(item?.low),
+    productId: normalizeProductId(item?.productId),
+  };
+}
+
 export function findCatalogProduct(target, catalog = []) {
   const productId = normalizeProductId(typeof target === "object" ? target?.productId : null);
   if (productId !== null) {
@@ -291,12 +313,19 @@ function collectLegacyRecipes(source, starterRecipes) {
 }
 
 export function linkStateProducts(nextState) {
-  const catalog = Array.isArray(nextState.productCatalog) ? nextState.productCatalog : [];
+  const catalog = Array.isArray(nextState.productCatalog)
+    ? nextState.productCatalog.map((product, index) => normalizeCatalogProduct(product, index)).filter((product) => product.name)
+    : [];
 
   return {
     ...nextState,
     productCatalog: catalog,
-    pantry: Array.isArray(nextState.pantry) ? nextState.pantry.map((item) => attachProductLink(item, catalog)) : [],
+    pantry: Array.isArray(nextState.pantry)
+      ? nextState.pantry
+          .map((item, index) => normalizePantryItem(item, index))
+          .filter((item) => item.name)
+          .map((item) => attachProductLink(item, catalog))
+      : [],
     recipeCatalog: Array.isArray(nextState.recipeCatalog)
       ? nextState.recipeCatalog.map((recipe) => ({
           ...recipe,
