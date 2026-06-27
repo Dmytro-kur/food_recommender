@@ -92,7 +92,7 @@ export function createFamilyController(deps) {
       await refreshFamilyContext();
       await loadStateForCurrentScope();
       await primeFamilyNotificationCursor();
-      await refreshFamilyPurchaseRequests();
+      await refreshFamilyPurchaseRequests({ renderIfChanged: true });
       closeModal();
       showToast(`Активний простір: ${getCurrentScopeLabel()}`);
       return true;
@@ -326,7 +326,7 @@ export function createFamilyController(deps) {
           await refreshFamilyContext();
           await loadStateForCurrentScope({ seedSnapshot: snapshot });
           await primeFamilyNotificationCursor();
-          await refreshFamilyPurchaseRequests();
+          await refreshFamilyPurchaseRequests({ renderIfChanged: true });
           closeModal();
           showToast(`Створено: ${getCurrentScopeLabel()}`);
         } catch (error) {

@@ -7,10 +7,7 @@ export function createMenuController(deps) {
     getState,
     findCatalogProduct,
     sameProduct,
-    parseIngredients,
     syncIngredientAvailability,
-    inferCategory,
-    estimatePrice,
     normalizeRecipe,
     openCreatePurchaseRequestFromRecipe,
     openModal,
@@ -39,24 +36,94 @@ export function createMenuController(deps) {
           id: state.productCatalog[existingIndex].id,
         };
       }
+      syncLinkedProductDetails(state.productCatalog[existingIndex]);
       return state.productCatalog[existingIndex];
     }
 
     state.productCatalog.push(normalizedProduct);
+    syncLinkedProductDetails(normalizedProduct);
     return normalizedProduct;
   }
 
-  function ensureCatalogEntryFromName(name, amount, overrides = {}) {
-    const catalogMatch = findCatalogProduct(name);
-    if (catalogMatch) return catalogMatch;
+  function findCatalogLinkId(name) {
+    return findCatalogProduct(name)?.id ?? null;
+  }
 
-    return upsertCatalogEntry({
-      name,
-      amount,
-      category: overrides.category || inferCategory(name),
-      price: overrides.price ?? estimatePrice(name),
-      emoji: overrides.emoji || "🥫",
+  function syncLinkedProductDetails(product) {
+    const state = getState();
+
+    state.pantry = state.pantry.map((item) =>
+      item.productId === product.id
+        ? {
+            ...item,
+            name: product.name,
+            emoji: product.emoji,
+          }
+        : item,
+    );
+
+    state.recipeCatalog = state.recipeCatalog.map((recipe) => ({
+      ...recipe,
+      ingredients: recipe.ingredients.map((ingredient) =>
+        ingredient.productId === product.id
+          ? {
+              ...ingredient,
+              name: product.name,
+            }
+          : ingredient,
+      ),
+    }));
+  }
+
+  function getCatalogProductUsage(productId) {
+    const state = getState();
+    const pantryCount = state.pantry.filter((item) => item.productId === productId).length;
+    const recipeTitles = [
+      ...new Set(
+        state.recipeCatalog
+          .filter((recipe) => recipe.ingredients.some((ingredient) => ingredient.productId === productId))
+          .map((recipe) => recipe.title)
+          .filter(Boolean),
+      ),
+    ];
+
+    return {
+      pantryCount,
+      recipeTitles,
+    };
+  }
+
+  function renderRecipeProductOptions(selectedProductId = null) {
+    const catalog = [...getState().productCatalog].sort((left, right) => {
+      const categoryCompare = String(left.category || "").localeCompare(String(right.category || ""), "uk");
+      if (categoryCompare !== 0) return categoryCompare;
+      return String(left.name || "").localeCompare(String(right.name || ""), "uk");
     });
+
+    const grouped = catalog.reduce((groups, product) => {
+      const category = product.category || "Інше";
+      groups[category] ||= [];
+      groups[category].push(product);
+      return groups;
+    }, {});
+
+    return Object.entries(grouped)
+      .map(
+        ([category, products]) => `
+          <optgroup label="${escapeHtml(category)}">
+            ${products
+              .map(
+                (product) => `
+                  <option value="${product.id}" ${product.id === selectedProductId ? "selected" : ""}>
+                    ${escapeHtml(product.name)} · ${escapeHtml(product.amount || "за смаком")} · ${formatMoney(product.price || 0)}
+                  </option>
+                `,
+              )
+              .join("")}
+          </optgroup>
+        `,
+      )
+      .join("");
   }
 
   function addCatalogProductToPantry(productId) {
@@ -91,8 +158,8 @@ export function createMenuController(deps) {
       <div class="sheet-handle"></div>
       <div class="sheet-header">
         <div>
-          <h2 id="modalTitle">${editing ? "Редагувати інгредієнт" : "Новий інгредієнт"}</h2>
-          <p>Банк інгредієнтів використовується для запасів і заявок.</p>
+          <h2 id="modalTitle">${editing ? "Редагувати продукт" : "Новий продукт"}</h2>
+          <p>Банк продуктів потрібен для магазину та заявок. Запаси в холодильнику ведуться окремо.</p>
         </div>
         <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
       </div>
@@ -151,7 +218,7 @@ export function createMenuController(deps) {
       syncIngredientAvailability();
       closeModal();
       render();
-      showToast(editing ? "Інгредієнт оновлено" : "Інгредієнт додано");
+      showToast(editing ? "Продукт оновлено" : "Продукт додано");
     });
   }
 
@@ -159,6 +226,32 @@ export function createMenuController(deps) {
     const state = getState();
     const product = state.productCatalog.find((entry) => entry.id === productId);
     if (!product) return;
+    const usage = getCatalogProductUsage(productId);
+    const isUsed = usage.pantryCount > 0 || usage.recipeTitles.length > 0;
+
+    if (isUsed) {
+      openModal(`
+        <div class="sheet-handle"></div>
+        <div class="sheet-header">
+          <div>
+            <h2 id="modalTitle">Продукт використовується</h2>
+            <p>${product.emoji} ${escapeHtml(product.name)} не можна видалити з банку, поки він є в холодильнику або рецептах.</p>
+          </div>
+          <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
+        </div>
+        <div class="warning-card">
+          <strong>Де він використовується</strong>
+          <p>
+            ${usage.pantryCount ? `У холодильнику: ${usage.pantryCount}.` : ""}
+            ${usage.recipeTitles.length ? ` У рецептах: ${escapeHtml(usage.recipeTitles.join(", "))}.` : ""}
+          </p>
+        </div>
+        <div class="sheet-actions">
+          <button class="primary-button" type="button" data-close-modal>Зрозуміло</button>
+        </div>
+      `);
+      return;
+    }
 
     openModal(`
       <div class="sheet-handle"></div>
@@ -177,6 +270,7 @@ export function createMenuController(deps) {
 
     modalSheet.querySelector("[data-confirm-delete-product]")?.addEventListener("click", () => {
       state.productCatalog = state.productCatalog.filter((entry) => entry.id !== productId);
+      syncIngredientAvailability();
       closeModal();
       render();
       showToast(`${product.name} видалено з банку`);
@@ -190,19 +284,19 @@ export function createMenuController(deps) {
       <div class="sheet-handle"></div>
       <div class="sheet-header">
         <div>
-          <h2 id="modalTitle">Банк інгредієнтів</h2>
-          <p>${state.productCatalog.length} позицій для швидкого додавання у запаси та заявки.</p>
+          <h2 id="modalTitle">Банк продуктів</h2>
+          <p>${state.productCatalog.length} позицій для заявок і швидкого поповнення холодильника.</p>
         </div>
         <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
       </div>
       <div class="purchase-request-toolbar">
         <button class="compact-button primary add-item-button" type="button" data-add-catalog-product>
-          ${icon("plus")} Додати інгредієнт
+          ${icon("plus")} Додати продукт
         </button>
       </div>
       <label class="pantry-search catalog-search">
         ${icon("search")}
-        <input id="catalogSearch" type="search" placeholder="Знайти інгредієнт" autocomplete="off" autofocus />
+        <input id="catalogSearch" type="search" placeholder="Знайти продукт" autocomplete="off" autofocus />
       </label>
       <div class="product-catalog-list">
         ${state.productCatalog
@@ -253,7 +347,7 @@ export function createMenuController(deps) {
       <div class="sheet-header">
         <div>
           <h2 id="modalTitle">${item.emoji} ${escapeHtml(item.name)}</h2>
-          <p>Онови залишок або стан інгредієнта.</p>
+          <p>Онови залишок у холодильнику. Банк продуктів це не змінить.</p>
         </div>
         <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
       </div>
@@ -303,9 +397,7 @@ export function createMenuController(deps) {
       pantryItem.amount = formData.get("amount").trim();
       pantryItem.emoji = formData.get("emoji").trim() || "🥫";
       pantryItem.low = formData.get("low") === "true";
-      pantryItem.productId = ensureCatalogEntryFromName(pantryItem.name, pantryItem.amount, {
-        emoji: pantryItem.emoji,
-      }).id;
+      pantryItem.productId = findCatalogLinkId(pantryItem.name);
       syncIngredientAvailability();
       closeModal();
       render();
@@ -325,7 +417,7 @@ export function createMenuController(deps) {
       <div class="sheet-header">
         <div>
           <h2 id="modalTitle">Видалити із запасів?</h2>
-          <p>${item.emoji} ${escapeHtml(item.name)} · ${escapeHtml(item.amount)}</p>
+          <p>${item.emoji} ${escapeHtml(item.name)} · ${escapeHtml(item.amount)} · у банку продукт залишиться</p>
         </div>
         <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
       </div>
@@ -349,17 +441,31 @@ export function createMenuController(deps) {
     const editing = recipeId !== null;
     const recipe = editing ? state.recipeCatalog.find((entry) => entry.id === recipeId) : null;
     if (editing && !recipe) return;
-
-    const ingredientsValue =
-      recipe?.ingredients.map((ingredient) => `${ingredient.name} | ${ingredient.amount}`).join("\n") || "";
     const stepsValue = recipe?.steps.join("\n") || "";
+    const hasCatalogProducts = state.productCatalog.length > 0;
+    const ingredientRows =
+      recipe?.ingredients.length
+        ? recipe.ingredients.map((ingredient, index) => ({
+            key: `${ingredient.productId || ingredient.name || "ingredient"}-${index}`,
+            productId: Number.isInteger(Number(ingredient.productId))
+              ? Number(ingredient.productId)
+              : findCatalogLinkId(ingredient.name),
+            amount: ingredient.amount || "",
+          }))
+        : [
+            {
+              key: `ingredient-${Date.now()}`,
+              productId: null,
+              amount: "",
+            },
+          ];
 
     openModal(`
       <div class="sheet-handle"></div>
       <div class="sheet-header">
         <div>
           <h2 id="modalTitle">${editing ? "Редагувати рецепт" : "Новий рецепт"}</h2>
-          <p>Додай інгредієнти та кроки приготування.</p>
+          <p>Збери рецепт із продуктів банку й задай кількість саме для цієї страви.</p>
         </div>
         <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
       </div>
@@ -384,30 +490,155 @@ export function createMenuController(deps) {
             <input name="price" type="number" min="0" max="100000" value="${recipe?.price || 50}" required />
           </label>
         </div>
-        <label class="field">
-          <span>Інгредієнти — один на рядок</span>
-          <textarea name="ingredients" rows="5" placeholder="Картопля | 500 г&#10;Морква | 2 шт" required>${escapeHtml(ingredientsValue)}</textarea>
-          <small class="form-help">Формат: назва | кількість. Наявність у запасах підтягнеться автоматично.</small>
-        </label>
+        <div class="recipe-ingredient-editor">
+          <div class="recipe-ingredient-toolbar">
+            <div>
+              <span>Інгредієнти з банку продуктів</span>
+              <small>Кожен інгредієнт вибирається з банку, а кількість задається окремо для рецепта.</small>
+            </div>
+            <button class="compact-button" type="button" data-add-recipe-ingredient ${hasCatalogProducts ? "" : "disabled"}>
+              ${icon("plus")} Додати
+            </button>
+          </div>
+          ${
+            hasCatalogProducts
+              ? `<div class="recipe-ingredient-list" data-recipe-ingredients></div>`
+              : `
+                <div class="warning-card">
+                  <strong>Банк продуктів порожній</strong>
+                  <p>Спершу додай продукти в банк, а потім збери з них рецепт.</p>
+                </div>
+              `
+          }
+        </div>
         <label class="field">
           <span>Кроки приготування — один на рядок</span>
           <textarea name="steps" rows="7" placeholder="Наріж овочі.&#10;Обсмаж цибулю 3 хвилини.&#10;Додай решту та тушкуй 15 хвилин." required>${escapeHtml(stepsValue)}</textarea>
         </label>
         <div class="sheet-actions">
           <button class="secondary-button" type="button" data-close-modal>Скасувати</button>
-          <button class="primary-button" type="submit">${icon("save")} ${editing ? "Зберегти" : "Додати"}</button>
+          <button class="primary-button" type="submit" ${hasCatalogProducts ? "" : "disabled"}>${icon("save")} ${editing ? "Зберегти" : "Додати"}</button>
         </div>
       </form>
     `);
 
+    const ingredientsRoot = modalSheet.querySelector("[data-recipe-ingredients]");
+    const addIngredientButton = modalSheet.querySelector("[data-add-recipe-ingredient]");
+
+    function renderIngredientRows() {
+      if (!ingredientsRoot) return;
+
+      ingredientsRoot.innerHTML = ingredientRows
+        .map(
+          (row, index) => `
+            <div class="recipe-ingredient-row" data-recipe-ingredient-row="${escapeHtml(row.key)}">
+              <label class="field">
+                <span>Продукт ${index + 1}</span>
+                <select data-recipe-ingredient-product="${escapeHtml(row.key)}">
+                  <option value="">Обери продукт</option>
+                  ${renderRecipeProductOptions(row.productId)}
+                </select>
+              </label>
+              <label class="field">
+                <span>Кількість для рецепта</span>
+                <input
+                  data-recipe-ingredient-amount="${escapeHtml(row.key)}"
+                  type="text"
+                  value="${escapeHtml(row.amount)}"
+                  placeholder="Наприклад, 200 г"
+                />
+              </label>
+              <button class="danger-outline-button recipe-ingredient-remove" type="button" data-remove-recipe-ingredient="${escapeHtml(row.key)}">
+                ${icon("trash")} Прибрати
+              </button>
+            </div>
+          `,
+        )
+        .join("");
+
+      ingredientsRoot.querySelectorAll("[data-recipe-ingredient-product]").forEach((select) => {
+        select.addEventListener("change", (event) => {
+          const row = ingredientRows.find((entry) => entry.key === event.currentTarget.dataset.recipeIngredientProduct);
+          if (!row) return;
+
+          const nextProductId = Number.parseInt(event.currentTarget.value, 10);
+          row.productId = Number.isInteger(nextProductId) ? nextProductId : null;
+
+          if (!row.amount && row.productId !== null) {
+            const product = state.productCatalog.find((entry) => entry.id === row.productId);
+            row.amount = product?.amount || "";
+            renderIngredientRows();
+          }
+        });
+      });
+
+      ingredientsRoot.querySelectorAll("[data-recipe-ingredient-amount]").forEach((input) => {
+        input.addEventListener("input", (event) => {
+          const row = ingredientRows.find((entry) => entry.key === event.currentTarget.dataset.recipeIngredientAmount);
+          if (!row) return;
+          row.amount = event.currentTarget.value;
+        });
+      });
+
+      ingredientsRoot.querySelectorAll("[data-remove-recipe-ingredient]").forEach((button) => {
+        button.addEventListener("click", () => {
+          if (ingredientRows.length === 1) {
+            ingredientRows[0] = {
+              key: ingredientRows[0].key,
+              productId: null,
+              amount: "",
+            };
+          } else {
+            const index = ingredientRows.findIndex((entry) => entry.key === button.dataset.removeRecipeIngredient);
+            if (index >= 0) ingredientRows.splice(index, 1);
+          }
+          renderIngredientRows();
+        });
+      });
+    }
+
+    addIngredientButton?.addEventListener("click", () => {
+      ingredientRows.push({
+        key: `ingredient-${Date.now()}-${ingredientRows.length}`,
+        productId: null,
+        amount: "",
+      });
+      renderIngredientRows();
+    });
+
+    renderIngredientRows();
+
     modalSheet.querySelector("#recipeForm")?.addEventListener("submit", (event) => {
       event.preventDefault();
       const formData = new FormData(event.currentTarget);
-      const ingredients = parseIngredients(formData.get("ingredients"));
       const steps = parseLines(formData.get("steps"));
+      const duplicateProductIds = new Set();
+      const ingredients = ingredientRows
+        .map((row) => {
+          if (!Number.isInteger(row.productId)) return null;
+          const product = state.productCatalog.find((entry) => entry.id === row.productId);
+          if (!product) return null;
+          return {
+            name: product.name,
+            amount: String(row.amount || "").trim() || product.amount || "за смаком",
+            productId: product.id,
+          };
+        })
+        .filter(Boolean);
 
       if (!ingredients.length || !steps.length) {
         showToast("Додай хоча б один інгредієнт і один крок");
+        return;
+      }
+
+      if (
+        ingredients.some((ingredient) => {
+          if (duplicateProductIds.has(ingredient.productId)) return true;
+          duplicateProductIds.add(ingredient.productId);
+          return false;
+        })
+      ) {
+        showToast("У рецепті не повинно бути дублів одного й того самого продукту");
         return;
       }
 
@@ -430,10 +661,6 @@ export function createMenuController(deps) {
       } else {
         state.recipeCatalog.unshift(nextRecipe);
       }
-
-      nextRecipe.ingredients.forEach((ingredient) => {
-        ensureCatalogEntryFromName(ingredient.name, ingredient.amount);
-      });
 
       syncIngredientAvailability();
       closeModal();
@@ -600,8 +827,8 @@ export function createMenuController(deps) {
       <div class="sheet-handle"></div>
       <div class="sheet-header">
         <div>
-          <h2 id="modalTitle">Додати до запасів</h2>
-          <p>Інгредієнт одразу почне враховуватись у доступності рецептів.</p>
+          <h2 id="modalTitle">Додати в холодильник</h2>
+          <p>Запас одразу вплине на доступність рецептів, але не створить товар у банку автоматично.</p>
         </div>
         <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
       </div>
@@ -612,7 +839,7 @@ export function createMenuController(deps) {
             <input name="emoji" type="text" maxlength="4" value="🥫" required />
           </label>
           <label class="field">
-            <span>Назва інгредієнта</span>
+            <span>Назва продукту</span>
             <input name="name" type="text" placeholder="Наприклад, вівсянка" required autofocus />
           </label>
         </div>
@@ -643,7 +870,6 @@ export function createMenuController(deps) {
       const name = formData.get("name").trim();
       const amount = formData.get("amount").trim();
       const emoji = formData.get("emoji").trim() || "🥫";
-      const catalogEntry = ensureCatalogEntryFromName(name, amount, { emoji });
 
       state.pantry.push({
         id: Date.now(),
@@ -651,7 +877,7 @@ export function createMenuController(deps) {
         amount,
         emoji,
         low: formData.get("low") === "true",
-        productId: catalogEntry.id,
+        productId: findCatalogLinkId(name),
       });
 
       syncIngredientAvailability();

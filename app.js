@@ -31,7 +31,6 @@ import {
   normalizeRecipe,
   mergeSharedState,
   areStatesEqual,
-  parseIngredients as parseStateIngredients,
   syncIngredientAvailability as syncStateIngredientAvailability,
   inferCategory as inferStateCategory,
   estimatePrice as estimateStatePrice,
@@ -81,20 +80,8 @@ function sameProduct(left, right) {
   return sameProductInCatalog(left, right, state.productCatalog);
 }
 
-function parseIngredients(value) {
-  return parseStateIngredients(value, state);
-}
-
 function syncIngredientAvailability() {
   syncStateIngredientAvailability(state);
-}
-
-function inferCategory(target) {
-  return inferStateCategory(target, state.productCatalog);
-}
-
-function estimatePrice(target) {
-  return estimateStatePrice(target, state.productCatalog);
 }
 
 function normalizeRequestedView(view) {
@@ -167,6 +154,7 @@ function setFamilyPurchaseRequests(nextRequests = []) {
   const changed = nextSignature !== familyPurchaseRequestsSignature;
   familyPurchaseRequests = normalized;
   familyPurchaseRequestsSignature = nextSignature;
+  updateRequestsBadge();
   return changed;
 }
 
@@ -204,8 +192,16 @@ function updateFamilyActivityBadge() {
   badge.textContent = unreadFamilyActivityCount > 99 ? "99+" : String(unreadFamilyActivityCount);
 }
 
+function updateRequestsBadge() {
+  if (!requestsBadge) return;
+  requestsBadge.textContent = String(familyPurchaseRequests.length);
+  requestsBadge.hidden = familyPurchaseRequests.length === 0;
+}
+
 function renderRequestsViewIfVisible() {
-  if (state.activeView === "requests" && modalBackdrop.hidden && !document.body.classList.contains("auth-mode")) {
+  if (document.body.classList.contains("auth-mode")) return;
+  updateRequestsBadge();
+  if (state.activeView === "requests") {
     render();
   }
 }
@@ -1060,10 +1056,7 @@ const menuController = createMenuController({
   getState: () => state,
   findCatalogProduct,
   sameProduct,
-  parseIngredients,
   syncIngredientAvailability,
-  inferCategory,
-  estimatePrice,
   normalizeRecipe,
   openCreatePurchaseRequestFromRecipe: (...args) => openCreatePurchaseRequestFromRecipe(...args),
   openModal,
@@ -1160,8 +1153,8 @@ async function bootstrap() {
     await refreshFamilyContext();
     await loadStateForCurrentScope();
     await primeFamilyNotificationCursor();
-    await refreshFamilyPurchaseRequests();
-    await refreshFamilyPurchaseRequestTemplates();
+    await refreshFamilyPurchaseRequests({ renderIfChanged: true });
+    await refreshFamilyPurchaseRequestTemplates({ renderIfChanged: true });
     startCloudSyncLoop();
   } catch (error) {
     if (currentUser) {

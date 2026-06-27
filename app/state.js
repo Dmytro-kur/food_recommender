@@ -1,8 +1,5 @@
 import { STARTER_DATA_VERSION, defaultState } from "./data.js";
-import {
-  normalizeIngredientName,
-  parseLines,
-} from "./utils.js";
+import { normalizeIngredientName } from "./utils.js";
 
 function normalizeProductId(value) {
   const numeric = Number(value);
@@ -362,20 +359,6 @@ function findPantryIngredient(target, pantry, catalog = []) {
 
 function hasPantryIngredient(target, pantry, catalog = []) {
   return Boolean(findPantryIngredient(target, pantry, catalog));
-}
-
-export function parseIngredients(value, state) {
-  return parseLines(value).map((line) => {
-    const [rawName, ...rawAmount] = line.split("|");
-    const name = rawName.trim();
-    const amount = rawAmount.join("|").trim() || "за смаком";
-
-    return {
-      name,
-      amount,
-      missing: !hasPantryIngredient(name, state.pantry, state.productCatalog),
-    };
-  });
 }
 
 export function syncIngredientAvailability(state) {

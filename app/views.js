@@ -376,14 +376,14 @@ export function renderPantryView(state) {
     <section class="screen">
       <div class="screen-heading-row">
         <div>
-          <p class="eyebrow">Інгредієнти</p>
-          <h1 class="screen-title">Запаси й банк</h1>
+          <p class="eyebrow">Холодильник</p>
+          <h1 class="screen-title">Запаси</h1>
         </div>
         <span class="date-label">${state.pantry.length} у запасах</span>
       </div>
       <label class="pantry-search">
         ${icon("search")}
-        <input id="pantrySearch" type="search" placeholder="Знайти інгредієнт" autocomplete="off" />
+        <input id="pantrySearch" type="search" placeholder="Знайти продукт у холодильнику" autocomplete="off" />
       </label>
       <div class="optimization-card">
         <span class="optimization-icon">${icon("spark")}</span>
@@ -395,8 +395,8 @@ export function renderPantryView(state) {
       <button class="catalog-open-button" type="button" data-open-product-catalog>
         <span class="catalog-open-icon">🧺</span>
         <span>
-          <strong>Банк інгредієнтів</strong>
-          <small>${state.productCatalog.length} базових позицій для швидкого поповнення запасів і заявок</small>
+          <strong>Банк продуктів</strong>
+          <small>${state.productCatalog.length} позицій для заявок і швидкого поповнення холодильника</small>
         </span>
         ${icon("arrow")}
       </button>
