@@ -17,7 +17,7 @@ import {
   updateFamilyPurchaseRequestItem,
   upsertFamilyPurchaseRequestTemplate,
 } from "./familyApi.js";
-import { escapeHtml, parseLines } from "./utils.js";
+import { escapeHtml, normalizeIngredientName, parseLines } from "./utils.js";
 import { formatMoney, icon } from "./ui.js";
 
 export function createPurchaseRequestController(deps) {
@@ -25,6 +25,7 @@ export function createPurchaseRequestController(deps) {
     neonClient,
     modalSheet,
     getState,
+    getPurchaseRequests,
     findCatalogProduct,
     inferCategory,
     estimatePrice,
@@ -168,6 +169,89 @@ export function createPurchaseRequestController(deps) {
     } catch {
       return "Покупки";
     }
+  }
+
+  function getRequestItemKey(item) {
+    if (Number.isInteger(Number(item?.productId))) {
+      return `product:${Number(item.productId)}`;
+    }
+    return `name:${normalizeIngredientName(item?.name || item?.item_name || "")}`;
+  }
+
+  function mergeRequestAmounts(leftAmount, rightAmount) {
+    const values = [leftAmount, rightAmount]
+      .map((value) => String(value || "").trim())
+      .filter(Boolean);
+
+    if (!values.length) return "за смаком";
+
+    const uniqueValues = [...new Set(values)];
+    if (uniqueValues.length === 1) return uniqueValues[0];
+
+    const specificValues = uniqueValues.filter((value) => normalizeIngredientName(value) !== "за смаком");
+    return (specificValues.length ? specificValues : uniqueValues).join(" + ");
+  }
+
+  function mergeRequestItems(primaryItems = [], secondaryItems = []) {
+    const merged = [];
+    const mergedByKey = new Map();
+
+    [...normalizeRequestItems(primaryItems), ...normalizeRequestItems(secondaryItems)].forEach((item) => {
+      const key = getRequestItemKey(item);
+      const existing = mergedByKey.get(key);
+
+      if (!existing) {
+        const nextItem = {
+          name: item.name,
+          amount: item.amount,
+          category: item.category,
+          price: Math.max(Number(item.price) || 0, 0),
+          productId: item.productId ?? null,
+        };
+        mergedByKey.set(key, nextItem);
+        merged.push(nextItem);
+        return;
+      }
+
+      existing.amount = mergeRequestAmounts(existing.amount, item.amount);
+      existing.category = existing.category || item.category || "Інше";
+      existing.price = Math.max(Number(existing.price) || 0, 0) + Math.max(Number(item.price) || 0, 0);
+      existing.productId ??= item.productId ?? null;
+    });
+
+    return merged;
+  }
+
+  function buildRecipeMissingItems(recipe) {
+    const catalog = getState().productCatalog;
+
+    return normalizeRequestItems(
+      (Array.isArray(recipe?.ingredients) ? recipe.ingredients : [])
+        .filter((ingredient) => ingredient?.missing)
+        .map((ingredient) => {
+          const catalogMatch = findCatalogProduct(ingredient, catalog) || findCatalogProduct(ingredient?.name, catalog);
+          return {
+            name: ingredient.name,
+            amount: ingredient.amount || catalogMatch?.amount || "за смаком",
+            category: catalogMatch?.category || inferCategory(ingredient, catalog),
+            price: catalogMatch?.price ?? estimatePrice(ingredient, catalog),
+            productId: ingredient.productId ?? catalogMatch?.id ?? null,
+          };
+        }),
+    );
+  }
+
+  function buildMergedRequestSource(primaryRequest, secondaryRequest) {
+    const mergedItems = mergeRequestItems(primaryRequest?.items, secondaryRequest?.items);
+    const notes = [primaryRequest?.request_note, secondaryRequest?.request_note]
+      .map((value) => String(value || "").trim())
+      .filter(Boolean);
+
+    return {
+      request_title: `Злито: ${primaryRequest.request_title} + ${secondaryRequest.request_title}`,
+      request_note: notes.join("\n"),
+      items: mergedItems,
+    };
   }
 
   function renderPurchaseRequestDetailItems(items = []) {
@@ -558,6 +642,25 @@ export function createPurchaseRequestController(deps) {
     });
   }
 
+  function openCreatePurchaseRequestFromRecipe(recipe) {
+    if (isPersonalScope()) {
+      showToast("Заявки доступні лише у сімейному просторі");
+      return;
+    }
+
+    const items = buildRecipeMissingItems(recipe);
+    if (!items.length) {
+      showToast("Для цього рецепта все вже є в запасах");
+      return;
+    }
+
+    openCreatePurchaseRequestModal({
+      request_title: `Докупити для ${recipe.title}`,
+      request_note: `На основі рецепта «${recipe.title}»`,
+      items,
+    });
+  }
+
   function openCreatePurchaseTemplateModal(source = null) {
     if (isPersonalScope()) {
       showToast("Шаблони доступні лише у сімейному просторі");
@@ -670,7 +773,7 @@ export function createPurchaseRequestController(deps) {
           <div class="sheet-header">
             <div>
               <h2 id="modalTitle">Не вдалося завантажити</h2>
-              <p>${escapeHtml(getFamilyNotificationsErrorMessage(result.error, "Помилка Neon Data API"))}</p>
+              <p>${escapeHtml(getFamilyNotificationsErrorMessage(result.error, "Не вдалося завантажити історію дій"))}</p>
             </div>
             <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
           </div>
@@ -723,7 +826,7 @@ export function createPurchaseRequestController(deps) {
         <div class="sheet-header">
           <div>
             <h2 id="modalTitle">Не вдалося завантажити</h2>
-            <p>${escapeHtml(getFamilyNotificationsErrorMessage(error, "Помилка Neon Data API"))}</p>
+            <p>${escapeHtml(getFamilyNotificationsErrorMessage(error, "Не вдалося завантажити історію дій"))}</p>
           </div>
           <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
         </div>
@@ -776,6 +879,15 @@ export function createPurchaseRequestController(deps) {
           <button class="compact-button primary add-item-button" type="button" data-repeat-purchase-request>
             ${icon("plus")} Повторити
           </button>
+          ${
+            getPurchaseRequests().length > 1
+              ? `
+                <button class="compact-button" type="button" data-merge-purchase-request>
+                  ${icon("arrow")} Злити
+                </button>
+              `
+              : ""
+          }
           <button class="compact-button" type="button" data-save-request-template>
             ${icon("save")} У шаблони
           </button>
@@ -790,6 +902,12 @@ export function createPurchaseRequestController(deps) {
 
       modalSheet.querySelector("[data-repeat-purchase-request]")?.addEventListener("click", () => {
         openCreatePurchaseRequestModal(request);
+      });
+      modalSheet.querySelector("[data-merge-purchase-request]")?.addEventListener("click", () => {
+        openMergePurchaseRequestModal({
+          ...request,
+          items,
+        });
       });
       modalSheet.querySelector("[data-save-request-template]")?.addEventListener("click", () => {
         openCreatePurchaseTemplateModal(request);
@@ -855,12 +973,66 @@ export function createPurchaseRequestController(deps) {
         <div class="sheet-header">
           <div>
             <h2 id="modalTitle">Не вдалося завантажити</h2>
-            <p>${escapeHtml(getFamilyPurchaseRequestsErrorMessage(error, "Помилка Neon Data API"))}</p>
+            <p>${escapeHtml(getFamilyPurchaseRequestsErrorMessage(error, "Не вдалося завантажити заявку"))}</p>
           </div>
           <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
         </div>
       `);
     }
+  }
+
+  function openMergePurchaseRequestModal(primaryRequest) {
+    const otherRequests = getPurchaseRequests().filter((request) => request.request_id !== primaryRequest.request_id);
+
+    if (!otherRequests.length) {
+      showToast("Потрібна ще одна заявка для злиття");
+      return;
+    }
+
+    openModal(`
+      <div class="sheet-handle"></div>
+      <div class="sheet-header">
+        <div>
+          <h2 id="modalTitle">Злити заявки</h2>
+          <p>Оберіть другу заявку для об'єднання з «${escapeHtml(primaryRequest.request_title || "Заявка")}».</p>
+        </div>
+        <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
+      </div>
+      <div class="action-card-list">
+        ${otherRequests
+          .map(
+            (request) => `
+              <button class="action-card-button" type="button" data-merge-with-request="${request.request_id}">
+                <span class="action-card-leading" aria-hidden="true">🧾</span>
+                <span class="action-card-copy">
+                  <strong>${escapeHtml(request.request_title)}</strong>
+                  <span>${escapeHtml(request.creator_display_name || "Хтось")} · ${formatFamilyDateTime(request.updated_at)}</span>
+                </span>
+                <span class="action-card-meta">${request.total_items || 0} поз.</span>
+              </button>
+            `,
+          )
+          .join("")}
+      </div>
+    `);
+
+    modalSheet.querySelectorAll("[data-merge-with-request]").forEach((button) => {
+      button.addEventListener("click", async () => {
+        const requestId = Number(button.dataset.mergeWithRequest);
+        if (!Number.isInteger(requestId)) return;
+
+        button.disabled = true;
+
+        try {
+          const secondaryRequest = await loadPurchaseRequestDetails(requestId);
+          const mergedSource = buildMergedRequestSource(primaryRequest, secondaryRequest);
+          openCreatePurchaseRequestModal(mergedSource);
+        } catch (error) {
+          button.disabled = false;
+          showToast(getFamilyPurchaseRequestsErrorMessage(error, "Не вдалося підготувати злиття"));
+        }
+      });
+    });
   }
 
   function openReusePurchaseTemplateModal(templateId) {
@@ -873,8 +1045,10 @@ export function createPurchaseRequestController(deps) {
 
   return {
     openCreatePurchaseRequestModal,
+    openCreatePurchaseRequestFromRecipe,
     openCreatePurchaseTemplateModal,
     openFamilyActivityModal,
+    openMergePurchaseRequestModal,
     openPurchaseRequestDetails,
     openEditPurchaseTemplateModal,
     openDeletePurchaseTemplateModal,

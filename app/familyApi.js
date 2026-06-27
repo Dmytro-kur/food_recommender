@@ -4,6 +4,58 @@ function hasRpcReference(error, names) {
   return names.some((name) => message.includes(name));
 }
 
+function mapKnownErrorMessage(message, fallback) {
+  const knownMessages = {
+    "Authentication required": "Потрібно увійти, щоб продовжити",
+    "App access denied for the current user": "Доступ до застосунку недоступний",
+    "Family access denied for the current user": "Немає доступу до цього простору",
+    "Purchase request not found": "Заявку не знайдено",
+    "Purchase request item not found": "Позицію не знайдено",
+    "Purchase request template not found": "Шаблон не знайдено",
+    "Purchase request items must be an array": "Не вдалося зберегти позиції заявки",
+    "Purchase request template items must be an array": "Не вдалося зберегти позиції шаблону",
+    "Select at least one item for the purchase request": "Додай хоча б одну позицію",
+    "Select at least one valid item for the purchase request": "Додай хоча б одну коректну позицію",
+    "Select at least one item for the template": "Додай хоча б одну позицію",
+    "Select at least one valid item for the template": "Додай хоча б одну коректну позицію",
+    "Switch to a family space before creating a purchase request": "Перемкнись у сімейний простір, щоб створити заявку",
+    "Switch to a family space before saving a template": "Перемкнись у сімейний простір, щоб зберегти шаблон",
+    "Unsupported purchase item status": "Не вдалося оновити статус позиції",
+    "Bought items can only receive a new comment": "Для купленої позиції можна додати лише коментар",
+    "Provide a reason when the product was not bought": "Вкажи причину, чому позицію не купили",
+  };
+
+  return knownMessages[message] || fallback;
+}
+
+function isTechnicalMessage(message) {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("neon") ||
+    normalized.includes("data api") ||
+    normalized.includes("schema.sql") ||
+    normalized.includes("rpc") ||
+    normalized.includes("function ") ||
+    normalized.includes("fetch") ||
+    normalized.includes("network") ||
+    normalized.includes("save_scoped_app_state") ||
+    normalized.includes("load_scoped_app_state") ||
+    normalized.includes("save_app_state") ||
+    normalized.includes("load_app_state") ||
+    normalized.includes("list_family_") ||
+    normalized.includes("create_family_") ||
+    normalized.includes("update_family_") ||
+    normalized.includes("delete_family_")
+  );
+}
+
+export function getFriendlyErrorMessage(error, fallback) {
+  const message = String(error?.message || "").trim();
+  if (!message) return fallback;
+  if (isTechnicalMessage(message)) return fallback;
+  return mapKnownErrorMessage(message, fallback);
+}
+
 export function isFamilyGroupsUnavailable(error) {
   return hasRpcReference(error, [
     "list_family_groups",
@@ -39,15 +91,15 @@ export function isFamilyPurchaseRequestsUnavailable(error) {
 }
 
 export function getFamilyGroupsErrorMessage(error, fallback) {
-  return isFamilyGroupsUnavailable(error) ? "Онови neon/schema.sql у Neon Console" : error?.message || fallback;
+  return isFamilyGroupsUnavailable(error) ? fallback : getFriendlyErrorMessage(error, fallback);
 }
 
 export function getFamilyNotificationsErrorMessage(error, fallback) {
-  return isFamilyNotificationsUnavailable(error) ? "Онови neon/schema.sql у Neon Console" : error?.message || fallback;
+  return isFamilyNotificationsUnavailable(error) ? fallback : getFriendlyErrorMessage(error, fallback);
 }
 
 export function getFamilyPurchaseRequestsErrorMessage(error, fallback) {
-  return isFamilyPurchaseRequestsUnavailable(error) ? "Онови neon/schema.sql у Neon Console" : error?.message || fallback;
+  return isFamilyPurchaseRequestsUnavailable(error) ? fallback : getFriendlyErrorMessage(error, fallback);
 }
 
 export function listFamilyGroups(client) {

@@ -810,7 +810,7 @@ p {
 .recipe-toolbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 12px;
   margin-bottom: 14px;
   padding: 11px 12px 11px 14px;
@@ -830,13 +830,40 @@ p {
 
 .catalog-recipe-card {
   display: grid;
-  grid-template-columns: 54px minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 11px;
   align-items: center;
   padding: 12px;
   border: 1px solid var(--line);
   border-radius: 19px;
   background: var(--surface);
+  transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.catalog-recipe-card:hover {
+  transform: translateY(-1px);
+  border-color: rgba(61, 107, 74, 0.22);
+  box-shadow: 0 14px 28px rgba(31, 42, 34, 0.08);
+}
+
+.catalog-recipe-main {
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr);
+  gap: 11px;
+  min-width: 0;
+  align-items: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.catalog-recipe-main:focus-visible {
+  outline: 2px solid var(--green);
+  outline-offset: 4px;
+  border-radius: 14px;
 }
 
 .catalog-recipe-emoji {
@@ -850,6 +877,8 @@ p {
 }
 
 .catalog-recipe-copy {
+  display: grid;
+  gap: 4px;
   min-width: 0;
 }
 
@@ -863,20 +892,22 @@ p {
   text-transform: uppercase;
 }
 
-.catalog-recipe-copy h3 {
-  margin: 0 0 4px;
+.catalog-recipe-title {
+  display: block;
   font-size: 14px;
+  font-weight: 700;
   letter-spacing: -0.025em;
 }
 
-.catalog-recipe-copy p {
-  margin: 0;
+.catalog-recipe-meta {
+  display: block;
   color: var(--muted);
   font-size: 10px;
 }
 
 .catalog-recipe-actions {
   display: flex;
+  align-items: center;
   gap: 5px;
 }
 
@@ -890,30 +921,6 @@ p {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 9px;
-}
-
-.database-note {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 8px;
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 700;
-}
-
-.database-dot {
-  width: 8px;
-  height: 8px;
-  flex: none;
-  border-radius: 50%;
-  background: #69a178;
-  box-shadow: 0 0 0 4px rgba(105, 161, 120, 0.12);
-}
-
-.database-note.offline .database-dot {
-  background: var(--orange);
-  box-shadow: 0 0 0 4px rgba(232, 135, 76, 0.12);
 }
 
 .optimization-card {
@@ -1012,6 +1019,35 @@ p {
   font-size: 12px;
 }
 
+.summary-action-button {
+  display: inline-flex;
+  min-height: 44px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.summary-action-button:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.summary-action-button svg {
+  width: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .remind-button {
   display: grid;
   width: 42px;
@@ -1048,6 +1084,60 @@ p {
   display: flex;
   gap: 9px;
   margin-bottom: 12px;
+}
+
+.action-card-list {
+  display: grid;
+  gap: 10px;
+}
+
+.action-card-button {
+  display: grid;
+  width: 100%;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--surface);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.action-card-button:hover {
+  transform: translateY(-1px);
+  border-color: rgba(61, 107, 74, 0.18);
+  box-shadow: 0 14px 28px rgba(31, 42, 34, 0.08);
+}
+
+.action-card-leading {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  flex: none;
+  place-items: center;
+  border-radius: 14px;
+  background: var(--surface-soft);
+  font-size: 24px;
+}
+
+.action-card-copy {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.action-card-copy strong {
+  font-size: 14px;
+}
+
+.action-card-copy span,
+.action-card-meta {
+  color: var(--muted);
+  font-size: 11px;
 }
 
 .purchase-history-button {
@@ -1247,6 +1337,23 @@ p {
 }
 
 @media (max-width: 420px) {
+  .shopping-summary {
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+
+  .summary-action-button {
+    width: 100%;
+  }
+
+  .action-card-button {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .action-card-meta {
+    grid-column: 2;
+  }
+
   .purchase-request-picker-grid {
     grid-template-columns: 1fr;
   }
@@ -1889,17 +1996,6 @@ p {
   font-size: 12px;
   font-weight: 800;
   cursor: pointer;
-}
-
-.config-code {
-  margin: 0 0 18px;
-  padding: 14px;
-  overflow-x: auto;
-  border-radius: 14px;
-  background: #202a23;
-  color: #eaf6df;
-  font-size: 11px;
-  line-height: 1.7;
 }
 
 .access-card {

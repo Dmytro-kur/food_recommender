@@ -1,6 +1,7 @@
 import {
   addFamilyGroupMember,
   createFamilyGroup,
+  getFriendlyErrorMessage,
   getFamilyGroupsErrorMessage,
   listAppUsers,
   listFamilyGroupMembers,
@@ -56,14 +57,14 @@ export function createFamilyController(deps) {
       <div class="sheet-handle"></div>
       <div class="sheet-header">
         <div>
-          <h2 id="modalTitle">Локальний режим</h2>
-          <p>Дані зберігаються лише в цьому браузері.</p>
+          <h2 id="modalTitle">Цей пристрій</h2>
+          <p>Дані доступні лише тут.</p>
         </div>
         <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
       </div>
       <div class="alternative-card">
-        <strong>Neon не використовується</strong>
-        <p>Прибери параметр <code>?local=1</code> після налаштування змінних середовища.</p>
+        <strong>Без акаунта</strong>
+        <p>Рецепти, запаси й заявки лишаються на цьому пристрої.</p>
       </div>
     `);
   }
@@ -248,7 +249,7 @@ export function createFamilyController(deps) {
     try {
       const groupsResult = await listFamilyGroups(neonClient);
       if (groupsResult.error) {
-        openErrorModal("Не вдалося завантажити", getFamilyGroupsErrorMessage(groupsResult.error, "Помилка Neon Data API"));
+        openErrorModal("Не вдалося завантажити", getFamilyGroupsErrorMessage(groupsResult.error, "Не вдалося завантажити сімейні групи"));
         return;
       }
 
@@ -260,7 +261,7 @@ export function createFamilyController(deps) {
       if (activeGroup) {
         const membersResult = await listFamilyGroupMembers(neonClient, activeGroup.family_id);
         if (membersResult.error) {
-          openErrorModal("Не вдалося завантажити", getFamilyGroupsErrorMessage(membersResult.error, "Помилка Neon Data API"));
+          openErrorModal("Не вдалося завантажити", getFamilyGroupsErrorMessage(membersResult.error, "Не вдалося завантажити учасників"));
           return;
         }
         members = membersResult.data || [];
@@ -393,7 +394,7 @@ export function createFamilyController(deps) {
         });
       });
     } catch (error) {
-      openErrorModal("Не вдалося завантажити", getFamilyGroupsErrorMessage(error, "Помилка Neon Data API"));
+      openErrorModal("Не вдалося завантажити", getFamilyGroupsErrorMessage(error, "Не вдалося завантажити сімейні групи"));
     }
   }
 
@@ -416,7 +417,7 @@ export function createFamilyController(deps) {
     try {
       const result = await listAppUsers(neonClient);
       if (result.error) {
-        openErrorModal("Не вдалося завантажити", result.error.message || "Помилка Neon Data API");
+        openErrorModal("Не вдалося завантажити", getFriendlyErrorMessage(result.error, "Не вдалося завантажити користувачів"));
         return;
       }
 
@@ -486,7 +487,7 @@ export function createFamilyController(deps) {
           if (updateResult.error) {
             button.disabled = false;
             button.textContent = "Спробувати ще";
-            showToast(updateResult.error.message || "Не вдалося змінити доступ");
+            showToast(getFriendlyErrorMessage(updateResult.error, "Не вдалося змінити доступ"));
             return;
           }
 
@@ -498,7 +499,7 @@ export function createFamilyController(deps) {
         });
       });
     } catch (error) {
-      openErrorModal("Не вдалося завантажити", error?.message || "Помилка Neon Data API");
+      openErrorModal("Не вдалося завантажити", getFriendlyErrorMessage(error, "Не вдалося завантажити користувачів"));
     }
   }
 

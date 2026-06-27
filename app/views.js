@@ -90,12 +90,9 @@ export function renderConfigurationScreenMarkup() {
         <span>Крихта</span>
       </div>
       <div class="auth-card">
-        <p class="eyebrow">Потрібне налаштування</p>
-        <h1>Neon ще не підключено</h1>
-        <p class="auth-description">Додай дві змінні середовища з Neon Console:</p>
-        <pre class="config-code">VITE_NEON_AUTH_URL
-VITE_NEON_DATA_API_URL</pre>
-        <p class="auth-description">Для локальної демонстрації можна відкрити адресу з параметром <code>?local=1</code>.</p>
+        <p class="eyebrow">Тимчасово недоступно</p>
+        <h1>Застосунок ще налаштовується</h1>
+        <p class="auth-description">Спробуй відкрити його трохи пізніше.</p>
       </div>
     </section>
   `;
@@ -139,16 +136,15 @@ function renderRecipeCard(recipe) {
 
   return `
     <article class="catalog-recipe-card">
-      <div class="catalog-recipe-emoji" aria-hidden="true">${recipe.emoji}</div>
-      <div class="catalog-recipe-copy">
-        <span class="catalog-tag">${missingCount ? "Потрібні інгредієнти" : "Готово до приготування"}</span>
-        <h3>${escapeHtml(recipe.title)}</h3>
-        <p>${recipe.time} хв · ${formatMoney(recipe.price)} · ${missingLabel}</p>
-      </div>
+      <button class="catalog-recipe-main" type="button" data-open-recipe="${recipe.id}" aria-label="Переглянути ${escapeHtml(recipe.title)}">
+        <span class="catalog-recipe-emoji" aria-hidden="true">${recipe.emoji}</span>
+        <span class="catalog-recipe-copy">
+          <span class="catalog-tag">${missingCount ? "Потрібні інгредієнти" : "Готово до приготування"}</span>
+          <span class="catalog-recipe-title">${escapeHtml(recipe.title)}</span>
+          <span class="catalog-recipe-meta">${recipe.time} хв · ${formatMoney(recipe.price)} · ${missingLabel}</span>
+        </span>
+      </button>
       <div class="catalog-recipe-actions">
-        <button class="tiny-icon-button" type="button" data-open-recipe="${recipe.id}" aria-label="Переглянути ${escapeHtml(recipe.title)}">
-          ${icon("arrow")}
-        </button>
         <button class="tiny-icon-button" type="button" data-edit-recipe="${recipe.id}" aria-label="Редагувати ${escapeHtml(recipe.title)}">
           ${icon("edit")}
         </button>
@@ -160,11 +156,7 @@ function renderRecipeCard(recipe) {
   `;
 }
 
-export function renderRecipesView(
-  state,
-  currentUser,
-  syncLabel = currentUser ? "Синхронізовано з Neon" : "Локальний режим",
-) {
+export function renderRecipesView(state) {
   const recipes = [...state.recipeCatalog].sort((left, right) => {
     const leftMissing = left.ingredients.filter((item) => item.missing).length;
     const rightMissing = right.ingredients.filter((item) => item.missing).length;
@@ -182,10 +174,6 @@ export function renderRecipesView(
         <span class="date-label">${recipes.length} рецептів</span>
       </div>
       <div class="recipe-toolbar">
-        <div class="database-note" id="syncIndicator">
-          <span class="database-dot"></span>
-          <span>${syncLabel}</span>
-        </div>
         <button class="compact-button primary" type="button" data-add-recipe>${icon("plus")} Рецепт</button>
       </div>
       <article class="shopping-summary cookbook-summary">
@@ -196,6 +184,9 @@ export function renderRecipesView(
           <strong>Можна приготувати вже зараз</strong>
           <span>${readyCount} з ${recipes.length} рецептів повністю покриваються запасами</span>
         </div>
+        <button class="summary-action-button" type="button" data-open-ready-recipes>
+          ${icon("arrow")} ${readyCount ? "Показати" : "Підібрати"}
+        </button>
       </article>
       ${
         recipes.length

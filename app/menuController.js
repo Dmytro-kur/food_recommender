@@ -5,7 +5,6 @@ export function createMenuController(deps) {
   const {
     modalSheet,
     getState,
-    getCurrentUser,
     findCatalogProduct,
     sameProduct,
     parseIngredients,
@@ -13,6 +12,7 @@ export function createMenuController(deps) {
     inferCategory,
     estimatePrice,
     normalizeRecipe,
+    openCreatePurchaseRequestFromRecipe,
     openModal,
     closeModal,
     render,
@@ -359,7 +359,7 @@ export function createMenuController(deps) {
       <div class="sheet-header">
         <div>
           <h2 id="modalTitle">${editing ? "Редагувати рецепт" : "Новий рецепт"}</h2>
-          <p>${getCurrentUser() ? "Зміни синхронізуються з Neon після збереження." : "Дані збережуться локально в браузері."}</p>
+          <p>Додай інгредієнти та кроки приготування.</p>
         </div>
         <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
       </div>
@@ -515,12 +515,82 @@ export function createMenuController(deps) {
         </ol>
       </section>
       <div class="sheet-actions">
+        ${
+          missingCount
+            ? `<button class="compact-button" type="button" data-create-request-from-recipe>${icon("plus")} У заявку</button>`
+            : ""
+        }
         <button class="secondary-button" type="button" data-edit-opened-recipe>${icon("edit")} Редагувати</button>
         <button class="primary-button" type="button" data-close-modal>Гаразд</button>
       </div>
     `);
 
+    modalSheet.querySelector("[data-create-request-from-recipe]")?.addEventListener("click", () => {
+      openCreatePurchaseRequestFromRecipe(recipe);
+    });
     modalSheet.querySelector("[data-edit-opened-recipe]")?.addEventListener("click", () => openRecipeForm(recipeId));
+  }
+
+  function openReadyRecipesModal() {
+    const recipes = [...getState().recipeCatalog]
+      .sort((left, right) => {
+        const leftMissing = left.ingredients.filter((item) => item.missing).length;
+        const rightMissing = right.ingredients.filter((item) => item.missing).length;
+        return leftMissing - rightMissing || left.title.localeCompare(right.title, "uk");
+      });
+    const readyRecipes = recipes.filter((recipe) => recipe.ingredients.every((ingredient) => !ingredient.missing));
+    const fallbackRecipes = readyRecipes.length ? readyRecipes : recipes.slice(0, 5);
+
+    openModal(`
+      <div class="sheet-handle"></div>
+      <div class="sheet-header">
+        <div>
+          <h2 id="modalTitle">${readyRecipes.length ? "Можна приготувати зараз" : "Майже готово"}</h2>
+          <p>${
+            readyRecipes.length
+              ? `${readyRecipes.length} ${pluralize(readyRecipes.length, "рецепт", "рецепти", "рецептів")} уже можна готувати`
+              : "Поки немає повністю готових рецептів, але ось найближчі варіанти"
+          }</p>
+        </div>
+        <button class="close-button" type="button" data-close-modal aria-label="Закрити">×</button>
+      </div>
+      ${
+        fallbackRecipes.length
+          ? `
+            <div class="action-card-list">
+              ${fallbackRecipes
+                .map((recipe) => {
+                  const missingCount = recipe.ingredients.filter((item) => item.missing).length;
+                  return `
+                    <button class="action-card-button" type="button" data-open-ready-recipe="${recipe.id}">
+                      <span class="action-card-leading" aria-hidden="true">${recipe.emoji}</span>
+                      <span class="action-card-copy">
+                        <strong>${escapeHtml(recipe.title)}</strong>
+                        <span>${recipe.time} хв · ${formatMoney(recipe.price)} · ${
+                          missingCount
+                            ? `${missingCount} ${pluralize(missingCount, "інгредієнта", "інгредієнтів", "інгредієнтів")} бракує`
+                            : "усе є під рукою"
+                        }</span>
+                      </span>
+                    </button>
+                  `;
+                })
+                .join("")}
+            </div>
+          `
+          : `
+            <div class="empty-state">
+              <span class="empty-state-emoji">📖</span>
+              <h3>Рецептів поки немає</h3>
+              <p>Додай перший рецепт, щоб тут з'явилися швидкі дії.</p>
+            </div>
+          `
+      }
+    `);
+
+    modalSheet.querySelectorAll("[data-open-ready-recipe]").forEach((button) => {
+      button.addEventListener("click", () => openRecipe(Number(button.dataset.openReadyRecipe)));
+    });
   }
 
   function openAddItemModal(type = "pantry") {
@@ -597,6 +667,7 @@ export function createMenuController(deps) {
     openRecipeForm,
     openDeleteRecipeModal,
     openRecipe,
+    openReadyRecipesModal,
     openAddItemModal,
   };
 }

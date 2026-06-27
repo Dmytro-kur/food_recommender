@@ -3,6 +3,7 @@ import { neonClient, neonConfigured } from "./neon.js";
 import { LOCAL_DB_STATE_KEY, STORAGE_KEY, availableViews, defaultState } from "./app/data.js";
 import {
   getLatestFamilyNotificationEventId,
+  getFriendlyErrorMessage,
   isFamilyGroupsUnavailable,
   isFamilyNotificationsUnavailable,
   isFamilyPurchaseRequestsUnavailable,
@@ -143,11 +144,6 @@ function getScopedLocalStateKey(userId = currentUser?.id, targetFamilyId = getAc
 
 function getCurrentScopeLabel() {
   return activeFamilyGroup?.family_name || "Особистий простір";
-}
-
-function getSyncIndicatorLabel(status = "synced") {
-  if (!currentUser) return "Локальний режим";
-  return status === "offline" ? `${getCurrentScopeLabel()} · офлайн-копія` : `${getCurrentScopeLabel()} · синхронізовано`;
 }
 
 function setFamilyContext(groups = []) {
@@ -639,9 +635,6 @@ async function syncCurrentScopeFromCloud(reason = "poll") {
         scheduleCloud: false,
         markDirty: false,
       });
-      if (isPersonalScope(targetFamilyId)) {
-        showToast("Оновлено дані з хмари");
-      }
     }
     return;
   }
@@ -655,7 +648,6 @@ async function syncCurrentScopeFromCloud(reason = "poll") {
       scheduleCloud: true,
       markDirty: true,
     });
-    showToast("Зміни злиті зі спільного простору");
   } else {
     scheduleCloudSave(currentSnapshot);
   }
@@ -827,7 +819,7 @@ async function handleAuthSubmit(event) {
           });
 
     if (result.error) {
-      renderAuthScreen(result.error.message || "Не вдалося виконати вхід");
+      renderAuthScreen(getFriendlyErrorMessage(result.error, "Не вдалося виконати вхід"));
       return;
     }
 
@@ -841,7 +833,7 @@ async function handleAuthSubmit(event) {
 
     await bootstrap();
   } catch (error) {
-    renderAuthScreen(error?.message || "Не вдалося з’єднатися з Neon");
+    renderAuthScreen(getFriendlyErrorMessage(error, "Не вдалося підключитися"));
   }
 }
 
@@ -874,17 +866,13 @@ async function signOut() {
   renderAuthScreen();
 }
 
-function updateSyncIndicator(status) {
-  const indicator = document.querySelector("#syncIndicator");
-  if (!indicator) return;
-  indicator.classList.toggle("offline", status === "offline");
-  indicator.querySelector("span:last-child").textContent = getSyncIndicatorLabel(status);
+function updateSyncIndicator() {
 }
 
 function render() {
   document.body.classList.remove("auth-mode");
   const renderers = {
-    recipes: () => renderRecipesView(state, currentUser, getSyncIndicatorLabel("synced")),
+    recipes: () => renderRecipesView(state),
     requests: () =>
       renderRequestsView({
         familyMode: Boolean(currentUser && !isPersonalScope()),
@@ -916,6 +904,9 @@ function bindViewEvents() {
 
   document.querySelectorAll("[data-open-recipe]").forEach((button) => {
     button.addEventListener("click", () => openRecipe(Number(button.dataset.openRecipe)));
+  });
+  document.querySelectorAll("[data-open-ready-recipes]").forEach((button) => {
+    button.addEventListener("click", openReadyRecipesModal);
   });
   document.querySelectorAll("[data-add-recipe]").forEach((button) => {
     button.addEventListener("click", () => openRecipeForm());
@@ -1040,11 +1031,42 @@ function showToast(message) {
   toastTimer = setTimeout(() => toast.classList.remove("visible"), 2400);
 }
 
+// Purchase-request flow is split out so app.js can stay focused on app lifecycle.
+const purchaseRequestController = createPurchaseRequestController({
+  neonClient,
+  modalSheet,
+  getState: () => state,
+  getPurchaseRequests: () => familyPurchaseRequests,
+  findCatalogProduct: findCatalogProductInCatalog,
+  inferCategory: inferStateCategory,
+  estimatePrice: estimateStatePrice,
+  showToast,
+  openModal,
+  closeModal,
+  isPersonalScope,
+  getCurrentScopeLabel,
+  getActiveFamilyId,
+  refreshFamilyPurchaseRequests,
+  refreshFamilyPurchaseRequestTemplates,
+  renderRequestsViewIfVisible,
+  clearUnreadFamilyActivity,
+});
+
+const {
+  openCreatePurchaseRequestModal,
+  openCreatePurchaseRequestFromRecipe,
+  openCreatePurchaseTemplateModal,
+  openFamilyActivityModal,
+  openPurchaseRequestDetails,
+  openEditPurchaseTemplateModal,
+  openDeletePurchaseTemplateModal,
+  openReusePurchaseTemplateModal,
+} = purchaseRequestController;
+
 // Cookbook and pantry flows are split out so app.js only wires view events.
 const menuController = createMenuController({
   modalSheet,
   getState: () => state,
-  getCurrentUser: () => currentUser,
   findCatalogProduct,
   sameProduct,
   parseIngredients,
@@ -1052,6 +1074,7 @@ const menuController = createMenuController({
   inferCategory,
   estimatePrice,
   normalizeRecipe,
+  openCreatePurchaseRequestFromRecipe: (...args) => openCreatePurchaseRequestFromRecipe(...args),
   openModal,
   closeModal,
   render,
@@ -1064,6 +1087,7 @@ const {
   openRecipeForm,
   openDeleteRecipeModal,
   openRecipe,
+  openReadyRecipesModal,
   openAddItemModal,
 } = menuController;
 
@@ -1091,36 +1115,6 @@ const familyController = createFamilyController({
 });
 
 const { openAccountModal } = familyController;
-
-// Purchase-request flow is split out so app.js can stay focused on app lifecycle.
-const purchaseRequestController = createPurchaseRequestController({
-  neonClient,
-  modalSheet,
-  getState: () => state,
-  findCatalogProduct: findCatalogProductInCatalog,
-  inferCategory: inferStateCategory,
-  estimatePrice: estimateStatePrice,
-  showToast,
-  openModal,
-  closeModal,
-  isPersonalScope,
-  getCurrentScopeLabel,
-  getActiveFamilyId,
-  refreshFamilyPurchaseRequests,
-  refreshFamilyPurchaseRequestTemplates,
-  renderRequestsViewIfVisible,
-  clearUnreadFamilyActivity,
-});
-
-const {
-  openCreatePurchaseRequestModal,
-  openCreatePurchaseTemplateModal,
-  openFamilyActivityModal,
-  openPurchaseRequestDetails,
-  openEditPurchaseTemplateModal,
-  openDeletePurchaseTemplateModal,
-  openReusePurchaseTemplateModal,
-} = purchaseRequestController;
 
 // Bootstrap is the final entrypoint so startup rules are readable in one place.
 async function bootstrap() {
@@ -1194,9 +1188,9 @@ async function bootstrap() {
     startCloudSyncLoop();
   } catch (error) {
     if (currentUser) {
-      renderAccessScreen(accessProfile || { status: "pending" }, error?.message || "Не вдалося перевірити доступ");
+      renderAccessScreen(accessProfile || { status: "pending" }, getFriendlyErrorMessage(error, "Не вдалося перевірити доступ"));
     } else {
-      renderAuthScreen(error?.message || "Не вдалося з’єднатися з Neon");
+      renderAuthScreen(getFriendlyErrorMessage(error, "Не вдалося підключитися"));
     }
   } finally {
     isBootstrapping = false;
