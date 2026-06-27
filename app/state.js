@@ -4,7 +4,7 @@ import {
   parseLines,
 } from "./utils.js";
 
-export function normalizeProductId(value) {
+function normalizeProductId(value) {
   const numeric = Number(value);
   return Number.isInteger(numeric) ? numeric : null;
 }
@@ -328,7 +328,7 @@ export function hydrateState(saved) {
   return linkStateProducts(hydrated);
 }
 
-export function serializeStateSnapshot(snapshot) {
+function serializeStateSnapshot(snapshot) {
   return JSON.stringify(canonicalizeValue(hydrateState(snapshot)));
 }
 
@@ -344,7 +344,7 @@ export function mergeSharedState(baseState, localState, remoteState) {
   return hydrateState(merged);
 }
 
-export function findPantryIngredient(target, pantry, catalog = []) {
+function findPantryIngredient(target, pantry, catalog = []) {
   const productKey = getProductKey(target, catalog);
   if (productKey) {
     const exactMatch = pantry.find((item) => getProductKey(item, catalog) === productKey);
@@ -360,7 +360,7 @@ export function findPantryIngredient(target, pantry, catalog = []) {
   });
 }
 
-export function hasPantryIngredient(target, pantry, catalog = []) {
+function hasPantryIngredient(target, pantry, catalog = []) {
   return Boolean(findPantryIngredient(target, pantry, catalog));
 }
 

@@ -1048,7 +1048,6 @@ export function createPurchaseRequestController(deps) {
     openCreatePurchaseRequestFromRecipe,
     openCreatePurchaseTemplateModal,
     openFamilyActivityModal,
-    openMergePurchaseRequestModal,
     openPurchaseRequestDetails,
     openEditPurchaseTemplateModal,
     openDeletePurchaseTemplateModal,

@@ -179,18 +179,22 @@ function setFamilyPurchaseRequestTemplates(nextTemplates = []) {
   return changed;
 }
 
-function clearFamilyPurchaseRequests() {
-  setFamilyPurchaseRequests([]);
-}
-
-function clearFamilyPurchaseRequestTemplates() {
-  setFamilyPurchaseRequestTemplates([]);
-}
-
 function resetFamilyNotificationState() {
   lastSeenFamilyNotificationEventId = 0;
   displayedFamilyNotificationKeys = new Map();
   unreadFamilyActivityCount = 0;
+}
+
+function resetCollaborativeRuntime() {
+  clearTimeout(cloudSaveTimer);
+  stopCloudSyncLoop();
+  clearCloudSnapshot();
+  cloudStateExists = false;
+  setFamilyPurchaseRequests([]);
+  setFamilyPurchaseRequestTemplates([]);
+  resetFamilyNotificationState();
+  setFamilyContext();
+  skipNextCloudSave = false;
 }
 
 function updateFamilyActivityBadge() {
@@ -365,7 +369,6 @@ async function persistCloudState(snapshot, targetFamilyId = getActiveFamilyId(),
     cloudStateExists = true;
     hasPendingCloudChanges = false;
     rememberCloudSnapshot(snapshotToSave, result.data?.updated_at || null);
-    updateSyncIndicator("synced");
 
     if (
       !areStatesEqual(snapshotToSave, originalSnapshot) &&
@@ -377,8 +380,6 @@ async function persistCloudState(snapshot, targetFamilyId = getActiveFamilyId(),
         markDirty: false,
       });
     }
-  } else {
-    updateSyncIndicator("offline");
   }
 
   return result;
@@ -744,7 +745,7 @@ function requestCloudSync(reason = "manual") {
     try {
       await syncCurrentScopeFromCloud(reason);
     } catch {
-      updateSyncIndicator("offline");
+      // Background sync failures should not interrupt local work.
     }
 
     try {
@@ -851,22 +852,12 @@ function renderAccessScreen(profile, errorMessage = "") {
 }
 
 async function signOut() {
-  clearTimeout(cloudSaveTimer);
-  stopCloudSyncLoop();
   await neonClient?.auth.signOut();
   currentUser = null;
   accessProfile = null;
-  setFamilyContext();
-  clearCloudSnapshot();
-  cloudStateExists = false;
-  clearFamilyPurchaseRequests();
-  clearFamilyPurchaseRequestTemplates();
-  resetFamilyNotificationState();
+  resetCollaborativeRuntime();
   authFormMode = "sign-in";
   renderAuthScreen();
-}
-
-function updateSyncIndicator() {
 }
 
 function render() {
@@ -1130,11 +1121,7 @@ async function bootstrap() {
   try {
     const localMode = new URLSearchParams(window.location.search).has("local");
     if (!neonConfigured) {
-      stopCloudSyncLoop();
-      clearCloudSnapshot();
-      clearFamilyPurchaseRequests();
-      clearFamilyPurchaseRequestTemplates();
-      resetFamilyNotificationState();
+      resetCollaborativeRuntime();
       if (!localMode) {
         renderConfigurationScreen();
         return;
@@ -1154,14 +1141,9 @@ async function bootstrap() {
     const sessionResult = await neonClient.auth.getSession();
     const user = getSessionUser(sessionResult);
     if (!user) {
-      stopCloudSyncLoop();
-      clearCloudSnapshot();
-      clearFamilyPurchaseRequests();
-      clearFamilyPurchaseRequestTemplates();
-      resetFamilyNotificationState();
+      resetCollaborativeRuntime();
       currentUser = null;
       accessProfile = null;
-      setFamilyContext();
       renderAuthScreen();
       return;
     }
@@ -1169,12 +1151,7 @@ async function bootstrap() {
     currentUser = user;
     accessProfile = await getAccessProfile(user);
     if (!accessProfile || accessProfile.status !== "active") {
-      stopCloudSyncLoop();
-      clearCloudSnapshot();
-      clearFamilyPurchaseRequests();
-      clearFamilyPurchaseRequestTemplates();
-      resetFamilyNotificationState();
-      setFamilyContext();
+      resetCollaborativeRuntime();
       renderAccessScreen(accessProfile || { status: "pending" });
       return;
     }

@@ -40,7 +40,3 @@ export function formatFamilyDateTime(value) {
     return value;
   }
 }
-
-export function isActivePurchaseRequestStatus(status) {
-  return status === "open" || status === "in_progress" || status === "partially_completed";
-}

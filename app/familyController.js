@@ -505,8 +505,5 @@ export function createFamilyController(deps) {
 
   return {
     openAccountModal,
-    openFamilyGroupsModal,
-    openAdminUsersModal,
-    switchFamilyScope,
   };
 }
